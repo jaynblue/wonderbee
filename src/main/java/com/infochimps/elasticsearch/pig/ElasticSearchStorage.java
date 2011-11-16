@@ -251,6 +251,11 @@ public class ElasticSearchStorage extends LoadFunc implements StoreFuncInterface
                 if (numTasks==null) numTasks = "100";
                 job.getConfiguration().set(ES_NUM_SPLITS, numTasks);
 
+                String actionField = query.get("action");
+                if (actionField != null) {
+                    job.getConfiguration().set(ElasticSearchOutputFormat.ES_ACTION_FIELD, actionField);
+                }
+
                 // Adds the elasticsearch.yml file (esConfig) and the plugins directory (esPlugins) to the distributed cache
                 try {
                     Path hdfsConfigPath = new Path(ES_CONFIG_HDFS_PATH);

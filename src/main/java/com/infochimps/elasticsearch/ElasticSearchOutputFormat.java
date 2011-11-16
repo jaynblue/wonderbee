@@ -1,14 +1,9 @@
 package com.infochimps.elasticsearch;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.Map;
-import java.util.HashMap;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Random;
-import java.net.URI;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -19,12 +14,8 @@ import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.RecordWriter;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.mapreduce.Counter;
 import org.apache.hadoop.mapreduce.OutputFormat;
 import org.apache.hadoop.mapreduce.OutputCommitter;
-import org.apache.hadoop.filecache.DistributedCache;
 
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
@@ -46,7 +37,8 @@ import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
    
  */
 public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWritable> implements Configurable {
-    
+    public static final String ES_ACTION_FIELD = "elasticsearch.action.field";
+
     static Log LOG = LogFactory.getLog(ElasticSearchOutputFormat.class);
     private Configuration conf = null;
 
@@ -84,6 +76,7 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
         private static final String NO_ID_FIELD = "-1";
         
         private volatile BulkRequestBuilder currentRequest;
+        private String actionField = null;
 
         /**
            Instantiates a new RecordWriter for Elasticsearch
@@ -111,13 +104,14 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             this.indexName = conf.get(ES_INDEX_NAME);
             this.bulkSize = Integer.parseInt(conf.get(ES_BULK_SIZE));
             this.idFieldName = conf.get(ES_ID_FIELD_NAME);
-            if (idFieldName.equals(NO_ID_FIELD)) {
+            if (idFieldName != null && idFieldName.equals(NO_ID_FIELD)) {
                 LOG.info("Documents will be assigned ids by elasticsearch");
                 this.idField = -1;
             } else {
                 LOG.info("Using field:["+idFieldName+"] for document ids");
             }
             this.objType    = conf.get(ES_OBJECT_TYPE);
+            this.actionField = conf.get(ES_ACTION_FIELD);
             
             //
             // Fetches elasticsearch.yml and the plugins directory from the distributed cache
@@ -159,21 +153,64 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             LOG.info("Record writer closed.");
         }
 
+        /*
+	public void addToIndex(String key, byte[] data) {
+		IndexRequestBuilder builder = this.client.prepareIndex(this.indexName, this.indexType, key);
+		builder.setConsistencyLevel(WriteConsistencyLevel.QUORUM);
+		builder.setReplicationType(ReplicationType.ASYNC);
+		builder.setTimeout(timeValueMillis(RESPONSE_TIMEOUT_MILLIS));
+		builder.setSource(data);
+		this.indexRequest(builder);
+	}
+
+	public void deleteFromIndex(String key) {
+		DeleteRequestBuilder builder = this.client.prepareDelete(indexName, indexType, key);
+		builder.setConsistencyLevel(WriteConsistencyLevel.QUORUM);
+		builder.setReplicationType(ReplicationType.ASYNC);
+		builder.execute();
+	}
+
+         */
+
         /**
            Writes a single MapWritable record to the bulkRequest object. Once <b>elasticsearch.bulk.size</b> are accumulated the
            records are written to elasticsearch.
          */
         public void write(NullWritable key, MapWritable fields) throws IOException {
             XContentBuilder builder = XContentFactory.jsonBuilder();
+            String action = null;
+            if (actionField != null) {
+                Writable w = fields.get(actionField);
+                if (w instanceof Text) {
+                    action = ((Text) w).toString();
+                }
+
+                // do not index actionField
+                fields.remove(actionField);
+            }
+
             buildContent(builder, fields);
+
             if (idField == -1) {
                 // Document has no inherent id
-                currentRequest.add(Requests.indexRequest(indexName).type(objType).source(builder));
+                if ("delete".equals(action)) {
+                    LOG.info("Delete without id field");
+                    return;
+                }
+                else {
+                    currentRequest.add(Requests.indexRequest(indexName).type(objType).source(builder));
+                }
             } else {
                 try {
                     Text mapKey = new Text(idFieldName);
                     String record_id = fields.get(mapKey).toString();
-                    currentRequest.add(Requests.indexRequest(indexName).id(record_id).type(objType).create(false).source(builder));                    
+                    if ("delete".equals(action)) {
+                        LOG.info("Deleting id: " + record_id);
+                        currentRequest.add(Requests.deleteRequest(indexName).id(record_id).type(objType));
+                    }
+                    else {
+                        currentRequest.add(Requests.indexRequest(indexName).id(record_id).type(objType).create(false).source(builder));
+                    }
                 } catch (Exception e) {
                     LOG.warn("Encountered malformed record");
                 }
@@ -255,6 +292,7 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             LOG.info("Starting embedded elasticsearch client ...");
             this.node   = NodeBuilder.nodeBuilder().client(true).node();
             this.client = node.client();
+
         }
     }
 
