@@ -216,13 +216,18 @@ public class ElasticSearchStorage extends LoadFunc implements StoreFuncInterface
             URI parsedLocation = new URI(location);
             HashMap<String, String> query = parseURIQuery(parsedLocation.getQuery());
 
-            String esHost = location.substring(5).split("/")[0];
+            String scheme = "es://";
+            if (!location.startsWith(scheme)) {
+                scheme = "/";
+            }
+
+            String esHost = location.substring(scheme.length()).split("/")[0];
             if (esHost==null) {
-                throw new RuntimeException("Missing elasticsearch index name, URI must be formatted as es://<index_name>/<object_type>?<params>");
+                throw new RuntimeException("Missing elasticsearch index name, URI must be formatted as es://<index_name>/<object_type>?<params> or /<index_name>/<object_type>?<params>");
             }
 
             if (parsedLocation.getPath()==null) {
-                throw new RuntimeException("Missing elasticsearch object type, URI must be formatted as es://<index_name>/<object_type>?<params>");
+                throw new RuntimeException("Missing elasticsearch object type, URI must be formatted as es://<index_name>/<object_type>?<params> or /<index_name>/<object_type>?<params>");
             } 
             
             Configuration conf = job.getConfiguration();

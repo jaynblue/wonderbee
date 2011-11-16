@@ -20,15 +20,14 @@ import org.apache.hadoop.mapreduce.TaskAttemptContext;
 
 import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
 
+import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.node.NodeBuilder;
 import org.elasticsearch.client.Client;
-import org.elasticsearch.client.Requests;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchType;
-import org.elasticsearch.index.query.xcontent.FilterBuilders.*;
-import org.elasticsearch.index.query.xcontent.QueryBuilders;
+
 
 /**
    
