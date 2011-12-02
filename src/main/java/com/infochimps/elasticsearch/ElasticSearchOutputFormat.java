@@ -17,6 +17,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.mapreduce.OutputFormat;
 import org.apache.hadoop.mapreduce.OutputCommitter;
 
+import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.node.Node;
@@ -38,6 +39,7 @@ import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
  */
 public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWritable> implements Configurable {
     public static final String ES_ACTION_FIELD = "elasticsearch.action.field";
+    public static final String ES_SKIP_IF_EXISTS = "es.skip.if.exits";
 
     static Log LOG = LogFactory.getLog(ElasticSearchOutputFormat.class);
     private Configuration conf = null;
@@ -52,6 +54,7 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
         private String idFieldName;
         private String objType;
         private String[] fieldNames;
+        private boolean skipIfExists = false;
         
         // Used for bookkeeping purposes
         private AtomicLong totalBulkTime  = new AtomicLong();
@@ -69,6 +72,7 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
         private static final String ES_OBJECT_TYPE = "elasticsearch.object.type";
         private static final String ES_CONFIG = "es.config";
         private static final String ES_PLUGINS = "es.path.plugins";
+
 
         // Other string constants
         private static final String COMMA = ",";
@@ -112,6 +116,10 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             }
             this.objType    = conf.get(ES_OBJECT_TYPE);
             this.actionField = conf.get(ES_ACTION_FIELD);
+
+            if ("true".equalsIgnoreCase(conf.get(ES_SKIP_IF_EXISTS))) {
+                this.skipIfExists = true;
+            }
             
             //
             // Fetches elasticsearch.yml and the plugins directory from the distributed cache
@@ -182,7 +190,7 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             if (actionField != null) {
                 Writable w = fields.get(actionField);
                 if (w instanceof Text) {
-                    action = ((Text) w).toString();
+                    action = w.toString();
                 }
 
                 // do not index actionField
@@ -209,7 +217,11 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
                         currentRequest.add(Requests.deleteRequest(indexName).id(record_id).type(objType));
                     }
                     else {
-                        currentRequest.add(Requests.indexRequest(indexName).id(record_id).type(objType).create(false).source(builder));
+                        IndexRequest request = Requests.indexRequest(indexName).id(record_id).type(objType).create(false).source(builder);
+                        if (this.skipIfExists) {
+                            request.opType(IndexRequest.OpType.CREATE);
+                        }
+                        currentRequest.add(request);
                     }
                 } catch (Exception e) {
                     LOG.warn("Encountered malformed record");

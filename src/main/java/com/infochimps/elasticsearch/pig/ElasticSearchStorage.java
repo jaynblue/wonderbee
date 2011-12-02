@@ -235,7 +235,7 @@ public class ElasticSearchStorage extends LoadFunc implements StoreFuncInterface
 
                 // Set elasticsearch index and object type in the Hadoop configuration
                 job.getConfiguration().set(ES_INDEX_NAME, esHost);
-                job.getConfiguration().set(ES_OBJECT_TYPE, parsedLocation.getPath().replaceAll("/", ""));
+                job.getConfiguration().set(ES_OBJECT_TYPE, parsedLocation.getPath().replaceAll(".*/", ""));
 
                 // Set the request size in the Hadoop configuration
                 String requestSize = query.get("size");
@@ -259,6 +259,11 @@ public class ElasticSearchStorage extends LoadFunc implements StoreFuncInterface
                 String actionField = query.get("action");
                 if (actionField != null) {
                     job.getConfiguration().set(ElasticSearchOutputFormat.ES_ACTION_FIELD, actionField);
+                }
+
+                String skipIfExists = query.get("createnew");
+                if ("true".equalsIgnoreCase(skipIfExists)) {
+                    job.getConfiguration().set(ElasticSearchOutputFormat.ES_SKIP_IF_EXISTS, "true");
                 }
 
                 // Adds the elasticsearch.yml file (esConfig) and the plugins directory (esPlugins) to the distributed cache
