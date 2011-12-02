@@ -221,6 +221,8 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
                         if (this.skipIfExists) {
                             request.opType(IndexRequest.OpType.CREATE);
                         }
+						request.consistencyLevel(org.elasticsearch.action.WriteConsistencyLevel.QUORUM);
+						request.replicationType("async");
                         currentRequest.add(request);
                     }
                 } catch (Exception e) {
