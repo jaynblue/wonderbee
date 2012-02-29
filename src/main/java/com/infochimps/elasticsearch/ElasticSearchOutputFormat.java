@@ -218,11 +218,9 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
                     }
                     else {
                         IndexRequest request = Requests.indexRequest(indexName).id(record_id).type(objType).create(false).source(builder);
-                        if (this.skipIfExists) {
-                            request.opType(IndexRequest.OpType.CREATE);
-                        }
+                        // request.opType(IndexRequest.OpType.CREATE);
 						request.consistencyLevel(org.elasticsearch.action.WriteConsistencyLevel.QUORUM);
-						request.replicationType("async");
+						request.replicationType("sync");
                         currentRequest.add(request);
                     }
                 } catch (Exception e) {
