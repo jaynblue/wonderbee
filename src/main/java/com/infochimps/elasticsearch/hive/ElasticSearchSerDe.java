@@ -3,14 +3,12 @@ package com.infochimps.elasticsearch.hive;
 import com.infochimps.elasticsearch.ElasticSearchOutputFormat;
 import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.filecache.DistributedCache;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.serde.Constants;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
-import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
-import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory;
-import org.apache.hadoop.hive.serde2.objectinspector.StructField;
-import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector;
+import org.apache.hadoop.hive.serde2.objectinspector.*;
 import org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory;
 import org.apache.hadoop.hive.serde2.objectinspector.primitive.StringObjectInspector;
 import org.apache.hadoop.hive.serde2.typeinfo.PrimitiveTypeInfo;
@@ -65,6 +63,7 @@ public class ElasticSearchSerDe implements SerDe {
     private static final String ES_CONFIG = "es.config";
     private static final String ES_PLUGINS = "es.path.plugins";
     private static final String ES_LOCATION = "es.location";
+    private static final String ES_HOSTPORT = "es.hostport";
 
 
     @Override
@@ -76,6 +75,8 @@ public class ElasticSearchSerDe implements SerDe {
             String columnTypeProperty = props.getProperty(Constants.LIST_COLUMN_TYPES);
             columnNames = Arrays.asList(columnNameProperty.split(","));
             columnTypes = TypeInfoUtils.getTypeInfosFromTypeString(columnTypeProperty);
+            LOG.info(columnNames);
+            LOG.info(columnTypes);
             assert columnNames.size() == columnTypes.size();
             numColumns = columnNames.size();
 
@@ -88,12 +89,18 @@ public class ElasticSearchSerDe implements SerDe {
                     columnOIs.add(ObjectInspectorFactory.getStandardListObjectInspector(PrimitiveObjectInspectorFactory.javaStringObjectInspector));
                 }
             }
+            LOG.info(columnOIs);
             rowOI = ObjectInspectorFactory.getStandardStructObjectInspector(columnNames, columnOIs);
 
             // Parse the passed in location URI, pulling out the arguments as well
             String location = properties.getProperty(ES_LOCATION);
+            //LOG.info(location);
             String esConfig = properties.getProperty(ES_CONFIG);
+            //LOG.info(esConfig);
             String esPlugins = properties.getProperty(ES_PLUGINS);
+            //LOG.info(esPlugins);
+            String esHostPort = properties.getProperty(ES_HOSTPORT);
+            LOG.info(esHostPort);
             URI parsedLocation = new URI(location);
             HashMap<String, String> query = parseURIQuery(parsedLocation.getQuery());
 
@@ -112,7 +119,25 @@ public class ElasticSearchSerDe implements SerDe {
             }
 
 
-            if (conf.get(ES_INDEX_NAME) == null) {
+            // Adds the elasticsearch.yml file (esConfig) and the plugins directory (esPlugins) to the distributed cache
+            try {
+                Configuration c = new Configuration();
+                Path hdfsConfigPath = new Path(ES_CONFIG_HDFS_PATH);
+                Path hdfsPluginsPath = new Path(ES_PLUGINS_HDFS_PATH);
+
+                HadoopUtils.uploadLocalFileIfChanged(new Path(LOCAL_SCHEME + esConfig), hdfsConfigPath, c);
+                LOG.info(hdfsConfigPath);
+                LOG.info(new Path(LOCAL_SCHEME + esConfig));
+                HadoopUtils.shipFileIfNotShipped(hdfsConfigPath, c);
+
+                HadoopUtils.uploadLocalFileIfChanged(new Path(LOCAL_SCHEME + esPlugins), hdfsPluginsPath, c);
+                HadoopUtils.shipArchiveIfNotShipped(hdfsPluginsPath, c);
+
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+
+            if (conf != null && conf.get(ES_INDEX_NAME) == null) {
 
                 // Set elasticsearch index and object type in the Hadoop configuration
                 conf.set(ES_INDEX_NAME, esHost);
@@ -147,21 +172,6 @@ public class ElasticSearchSerDe implements SerDe {
                     conf.set(ElasticSearchOutputFormat.ES_SKIP_IF_EXISTS, "true");
                 }
 
-                // Adds the elasticsearch.yml file (esConfig) and the plugins directory (esPlugins) to the distributed cache
-                try {
-                    Path hdfsConfigPath = new Path(ES_CONFIG_HDFS_PATH);
-                    Path hdfsPluginsPath = new Path(ES_PLUGINS_HDFS_PATH);
-
-                    HadoopUtils.uploadLocalFileIfChanged(new Path(LOCAL_SCHEME + esConfig), hdfsConfigPath, conf);
-                    HadoopUtils.shipFileIfNotShipped(hdfsConfigPath, conf);
-
-                    HadoopUtils.uploadLocalFileIfChanged(new Path(LOCAL_SCHEME + esPlugins), hdfsPluginsPath, conf);
-                    HadoopUtils.shipArchiveIfNotShipped(hdfsPluginsPath, conf);
-
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-
                 //
                 // This gets set even when loading data from elasticsearch
                 //
@@ -173,6 +183,9 @@ public class ElasticSearchSerDe implements SerDe {
                 // Need to set this to start the local instance of elasticsearch
                 conf.set(ES_CONFIG, esConfig);
                 conf.set(ES_PLUGINS, esPlugins);
+                conf.set(ES_HOSTPORT, esHostPort);
+            } else {
+                LOG.info("Initialize called with null conf!");
             }
         } catch (URISyntaxException e) {
             throw new RuntimeException(e);
@@ -193,45 +206,23 @@ public class ElasticSearchSerDe implements SerDe {
 
         String isJson = props.getProperty(ES_IS_JSON);
         // Handle delimited records (ie. isJson == false)
-        if (isJson != null && isJson.equals("false")) {
-            String[] fieldNames = props.getProperty(PIG_ES_FIELD_NAMES).split(COMMA);
-            for (int c = 0; c < numColumns; c++) {
-                try {
-                    Object field = outputRowOI.getStructFieldData(obj,
-                            outputFieldRefs.get(c));
-                    ObjectInspector fieldOI = outputFieldRefs.get(c)
-                            .getFieldObjectInspector();
-                    // The data must be of type String
-                    StringObjectInspector fieldStringOI = (StringObjectInspector) fieldOI;
-                    String columnName = columnNames.get(c);
-                    record.put(new Text(columnName), new Text(fieldStringOI.getPrimitiveWritableObject(field)));
-                } catch (NullPointerException e) {
-                    //LOG.info("Increment null field counter.");
-                }
 
-            }
-        } else {
-            Object field = outputRowOI.getStructFieldData(obj,
-                    outputFieldRefs.get(0));
-
-            if (field != null) {
-                ObjectInspector fieldOI = outputFieldRefs.get(0)
+        for (int c = 0; c < numColumns; c++) {
+            try {
+                Object field = outputRowOI.getStructFieldData(obj,
+                        outputFieldRefs.get(c));
+                ObjectInspector fieldOI = outputFieldRefs.get(c)
                         .getFieldObjectInspector();
-                StringObjectInspector fieldStringOI = (StringObjectInspector) fieldOI;
-                String jsonData = fieldStringOI.getPrimitiveJavaObject(field);
-                // parse json data and put into mapwritable record
-                try {
-                    HashMap<String, Object> data = mapper.readValue(jsonData, HashMap.class);
-                    record = (MapWritable) toWritable(data);
-                } catch (JsonParseException e) {
-                    e.printStackTrace();
-                } catch (JsonMappingException e) {
-                    e.printStackTrace();
-                } catch (IOException e) {
-                    e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
-                }
+
+                PrimitiveObjectInspector fieldStringOI = (PrimitiveObjectInspector) fieldOI;
+                String columnName = columnNames.get(c);
+                record.put(new Text(columnName), (Writable) fieldStringOI.getPrimitiveWritableObject(field));
+            } catch (NullPointerException e) {
+                //LOG.info("Increment null field counter.");
             }
+
         }
+
 
         return record;
     }
@@ -243,6 +234,8 @@ public class ElasticSearchSerDe implements SerDe {
 
     @Override
     public ObjectInspector getObjectInspector() throws SerDeException {
+        LOG.info("Returning ObjectInspector");
+        LOG.info(rowOI);
         return rowOI;
     }
 
