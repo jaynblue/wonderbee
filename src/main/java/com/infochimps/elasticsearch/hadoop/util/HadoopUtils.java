@@ -29,16 +29,7 @@ public class HadoopUtils {
        Upload a local file to the cluster, if it's newer or nonexistent
      */
     public static void uploadLocalFileIfChanged(Path localsrc, Path hdfsdest, Configuration conf) throws IOException {
-        long l_time = new File(localsrc.toUri()).lastModified();
-        try {
-            long h_time = FileSystem.get(conf).getFileStatus(hdfsdest).getModificationTime();
-            if ( l_time > h_time ) {
-                uploadLocalFile(localsrc, hdfsdest, conf);
-            }
-        }
-        catch (FileNotFoundException e) {
             uploadLocalFile(localsrc, hdfsdest, conf);
-        }
     }
 
 
@@ -49,6 +40,7 @@ public class HadoopUtils {
         Path[] cacheFiles = DistributedCache.getLocalCacheFiles(conf);
         if (cacheFiles != null && cacheFiles.length > 0) {
             for (Path cacheFile : cacheFiles) {
+                System.out.println(cacheFile);
                 if (cacheFile.getName().equals(basename)) {
                     return cacheFile.toString();
                 }
@@ -64,6 +56,7 @@ public class HadoopUtils {
         Path[] cacheArchives = DistributedCache.getLocalCacheArchives(conf);
         if (cacheArchives != null && cacheArchives.length > 0) {
             for (Path cacheArchive : cacheArchives) {
+                System.out.println(cacheArchive);
                 if (cacheArchive.getName().equals(basename)) {
                     return cacheArchive.toString();
                 }

@@ -1,5 +1,6 @@
 package com.infochimps.elasticsearch;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Map;
@@ -11,9 +12,11 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import org.apache.hadoop.conf.Configurable;
+import org.apache.hadoop.filecache.DistributedCache;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
 import org.apache.hadoop.hive.ql.exec.Utilities;
+import org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat;
 import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
 import org.apache.hadoop.hive.serde.Constants;
 import org.apache.hadoop.io.*;
@@ -27,6 +30,9 @@ import org.apache.hadoop.mapreduce.OutputCommitter;
 
 import org.apache.hadoop.util.Progressable;
 import org.elasticsearch.action.index.IndexRequest;
+import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.client.transport.TransportClient;
+import org.elasticsearch.common.transport.InetSocketTransportAddress;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.node.Node;
@@ -64,7 +70,7 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
         private String objType;
         private String[] fieldNames;
         private boolean skipIfExists = false;
-        
+        private String hostPort;
         // Used for bookkeeping purposes
         private AtomicLong totalBulkTime  = new AtomicLong();
         private AtomicLong totalBulkItems = new AtomicLong();
@@ -81,6 +87,7 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
         private static final String ES_OBJECT_TYPE = "elasticsearch.object.type";
         private static final String ES_CONFIG = "es.config";
         private static final String ES_PLUGINS = "es.path.plugins";
+
 
 
         // Other string constants
@@ -140,9 +147,11 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
                 String taskConfigPath = HadoopUtils.fetchFileFromCache(ES_CONFIG_NAME, conf);
                 LOG.info("Using ["+taskConfigPath+"] as es.config");
                 String taskPluginsPath = HadoopUtils.fetchArchiveFromCache(ES_PLUGINS_NAME, conf);
-                LOG.info("Using ["+taskPluginsPath+"] as es.plugins.dir");
+                LOG.info("Using [" + taskPluginsPath + "] as es.plugins.dir");
                 System.setProperty(ES_CONFIG, taskConfigPath);
                 System.setProperty(ES_PLUGINS, taskPluginsPath+SLASH+ES_PLUGINS_NAME);
+                this.hostPort = conf.get("es.hostport");
+                LOG.info(hostPort);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -313,9 +322,19 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
         // Starts an embedded elasticsearch client (ie. data = false)
         //
         private void start_embedded_client() {
-            LOG.info("Starting embedded elasticsearch client ...");
-            this.node   = NodeBuilder.nodeBuilder().client(true).node();
-            this.client = node.client();
+
+            if (this.hostPort != null) {
+                LOG.info("Starting transport client ...");
+                String[] split = this.hostPort.split(":");
+                String host = split[0];
+                int port = Integer.decode(split[1]);
+                this.client = new TransportClient()
+                        .addTransportAddress(new InetSocketTransportAddress(host, port));
+            } else {
+                LOG.info("Starting embedded elasticsearch client ...");
+                this.node   = NodeBuilder.nodeBuilder().client(true).node();
+                this.client = node.client();
+            }
 
         }
 
@@ -351,11 +370,25 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
 
     @Override
     public FileSinkOperator.RecordWriter getHiveRecordWriter(JobConf entries, Path path, Class<? extends Writable> aClass, boolean b, Properties tableProperties, Progressable progressable) throws IOException {
-        return new ElasticSearchRecordWriter(entries);
+        final FileSinkOperator.RecordWriter esWriter = new ElasticSearchRecordWriter(entries);
+        HiveIgnoreKeyTextOutputFormat ik = new HiveIgnoreKeyTextOutputFormat();
+        final FileSinkOperator.RecordWriter textWriter = ik.getHiveRecordWriter(entries,path,aClass,b,tableProperties,progressable);
+        return new FileSinkOperator.RecordWriter(){
+            public void write(Writable obj) throws IOException {
+                esWriter.write(obj);
+                textWriter.write(new Text(obj.toString()));
+            }
+            public void close(boolean bool) throws IOException {
+                esWriter.close(bool);
+                textWriter.close(bool);
+            }
+        };
+
 
     }
 
     public void setConf(Configuration conf) {
+        this.conf = conf;
     }
 
     public Configuration getConf() {
