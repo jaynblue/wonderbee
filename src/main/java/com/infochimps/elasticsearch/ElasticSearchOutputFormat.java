@@ -1,50 +1,40 @@
 package com.infochimps.elasticsearch;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.util.Map;
-import java.util.Properties;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.Random;
-
+import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-
 import org.apache.hadoop.conf.Configurable;
-import org.apache.hadoop.filecache.DistributedCache;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
-import org.apache.hadoop.hive.ql.exec.Utilities;
-import org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat;
 import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
-import org.apache.hadoop.hive.serde.Constants;
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapred.JobConf;
-import org.apache.hadoop.mapreduce.TaskAttemptContext;
-import org.apache.hadoop.mapreduce.JobContext;
-import org.apache.hadoop.mapreduce.RecordWriter;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.mapreduce.OutputFormat;
-import org.apache.hadoop.mapreduce.OutputCommitter;
-
+import org.apache.hadoop.mapreduce.*;
 import org.apache.hadoop.util.Progressable;
+import org.elasticsearch.ElasticSearchException;
+import org.elasticsearch.ExceptionsHelper;
+import org.elasticsearch.action.bulk.BulkRequestBuilder;
+import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.action.index.IndexRequest;
-import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.client.Client;
+import org.elasticsearch.client.Requests;
 import org.elasticsearch.client.transport.TransportClient;
+import org.elasticsearch.common.settings.ImmutableSettings;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
+import org.elasticsearch.indices.IndexAlreadyExistsException;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.node.NodeBuilder;
-import org.elasticsearch.client.Client;
-import org.elasticsearch.client.Requests;
-import org.elasticsearch.client.action.bulk.BulkRequestBuilder;
-import org.elasticsearch.indices.IndexAlreadyExistsException;
-import org.elasticsearch.action.bulk.BulkResponse;
-import org.elasticsearch.ExceptionsHelper;
 
-import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
+import java.io.IOException;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
    
@@ -144,14 +134,18 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             // Fetches elasticsearch.yml and the plugins directory from the distributed cache
             //
             try {
+
+                this.hostPort = conf.get("es.hostport");
+                if (hostPort != null) {
+                    LOG.info("Using transport client to load to "+hostPort);
+                }
                 String taskConfigPath = HadoopUtils.fetchFileFromCache(ES_CONFIG_NAME, conf);
                 LOG.info("Using ["+taskConfigPath+"] as es.config");
                 String taskPluginsPath = HadoopUtils.fetchArchiveFromCache(ES_PLUGINS_NAME, conf);
                 LOG.info("Using [" + taskPluginsPath + "] as es.plugins.dir");
                 System.setProperty(ES_CONFIG, taskConfigPath);
                 System.setProperty(ES_PLUGINS, taskPluginsPath+SLASH+ES_PLUGINS_NAME);
-                this.hostPort = conf.get("es.hostport");
-                LOG.info(hostPort);
+
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -296,8 +290,13 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
                     long startTime        = System.currentTimeMillis();
                     BulkResponse response = currentRequest.execute().actionGet();
                     totalBulkTime.addAndGet(System.currentTimeMillis() - startTime);
+
                     if (randgen.nextDouble() < 0.1) {
                         LOG.info("Indexed [" + totalBulkItems.get() + "] in [" + (totalBulkTime.get()/1000) + "s] of indexing"+"[" + ((System.currentTimeMillis() - runStartTime)/1000) + "s] of wall clock"+" for ["+ (float)(1000.0*totalBulkItems.get())/(System.currentTimeMillis() - runStartTime) + "rec/s]");
+                    }
+
+                    if(response.hasFailures()) {
+                      throw new ElasticSearchException(response.buildFailureMessage());
                     }
                 } catch (Exception e) {
                     LOG.warn("Bulk request failed: " + e.getMessage());
@@ -314,6 +313,8 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             } catch (Exception e) {
                 if (ExceptionsHelper.unwrapCause(e) instanceof IndexAlreadyExistsException) {
                     LOG.warn("Index ["+indexName+"] already exists");
+                } else {
+                    LOG.warn(e);
                 }
             }
         }
@@ -324,16 +325,21 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
         private void start_embedded_client() {
 
             if (this.hostPort != null) {
-                LOG.info("Starting transport client ...");
+                LOG.info("Starting transport elasticsearch client ...");
+                Settings settings = ImmutableSettings.settingsBuilder()
+                        .put("client.transport.sniff", true).build();
                 String[] split = this.hostPort.split(":");
                 String host = split[0];
                 int port = Integer.decode(split[1]);
+
                 this.client = new TransportClient()
                         .addTransportAddress(new InetSocketTransportAddress(host, port));
+                LOG.info("Transport client started");
             } else {
                 LOG.info("Starting embedded elasticsearch client ...");
                 this.node   = NodeBuilder.nodeBuilder().client(true).node();
                 this.client = node.client();
+                LOG.info("Embedded elasticsearch client started");
             }
 
         }
@@ -348,12 +354,14 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             if (currentRequest.numberOfActions() > 0) {
                 try {
                     BulkResponse response = currentRequest.execute().actionGet();
+                    if(response.hasFailures()) {
+                        throw new ElasticSearchException(response.buildFailureMessage());
+                    }
                 } catch (Exception e) {
                     LOG.warn("Bulk request failed: " + e.getMessage());
                     throw new RuntimeException(e);
                 }
             }
-            LOG.info("Closing record writer");
             client.close();
             LOG.info("Client is closed");
             if (node != null) {
@@ -369,18 +377,17 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
     }
 
     @Override
-    public FileSinkOperator.RecordWriter getHiveRecordWriter(JobConf entries, Path path, Class<? extends Writable> aClass, boolean b, Properties tableProperties, Progressable progressable) throws IOException {
+    public FileSinkOperator.RecordWriter getHiveRecordWriter(JobConf entries, final Path path, Class<? extends Writable> aClass, boolean b, Properties tableProperties, final Progressable progressable) throws IOException {
         final FileSinkOperator.RecordWriter esWriter = new ElasticSearchRecordWriter(entries);
-        HiveIgnoreKeyTextOutputFormat ik = new HiveIgnoreKeyTextOutputFormat();
-        final FileSinkOperator.RecordWriter textWriter = ik.getHiveRecordWriter(entries,path,aClass,b,tableProperties,progressable);
+        final FileSystem fs = path.getFileSystem(entries);
         return new FileSinkOperator.RecordWriter(){
             public void write(Writable obj) throws IOException {
                 esWriter.write(obj);
-                textWriter.write(new Text(obj.toString()));
             }
             public void close(boolean bool) throws IOException {
                 esWriter.close(bool);
-                textWriter.close(bool);
+                //FileSinkOperator will throw an exception if we don't write anything.
+                fs.create(path).close();
             }
         };
 

@@ -10,17 +10,13 @@ import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
 import org.apache.hadoop.hive.serde2.objectinspector.*;
 import org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory;
-import org.apache.hadoop.hive.serde2.objectinspector.primitive.StringObjectInspector;
 import org.apache.hadoop.hive.serde2.typeinfo.PrimitiveTypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils;
 import org.apache.hadoop.io.*;
 import org.apache.log4j.Logger;
-import org.codehaus.jackson.JsonParseException;
-import org.codehaus.jackson.map.JsonMappingException;
 import org.codehaus.jackson.map.ObjectMapper;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.*;
@@ -70,13 +66,10 @@ public class ElasticSearchSerDe implements SerDe {
     public void initialize(Configuration conf, Properties properties) throws SerDeException {
         try {
             props = properties;
-            // We can get the table definition from tbl.
             String columnNameProperty = props.getProperty(Constants.LIST_COLUMNS);
             String columnTypeProperty = props.getProperty(Constants.LIST_COLUMN_TYPES);
             columnNames = Arrays.asList(columnNameProperty.split(","));
             columnTypes = TypeInfoUtils.getTypeInfosFromTypeString(columnTypeProperty);
-            LOG.info(columnNames);
-            LOG.info(columnTypes);
             assert columnNames.size() == columnTypes.size();
             numColumns = columnNames.size();
 
@@ -89,18 +82,14 @@ public class ElasticSearchSerDe implements SerDe {
                     columnOIs.add(ObjectInspectorFactory.getStandardListObjectInspector(PrimitiveObjectInspectorFactory.javaStringObjectInspector));
                 }
             }
-            LOG.info(columnOIs);
             rowOI = ObjectInspectorFactory.getStandardStructObjectInspector(columnNames, columnOIs);
 
             // Parse the passed in location URI, pulling out the arguments as well
             String location = properties.getProperty(ES_LOCATION);
-            //LOG.info(location);
             String esConfig = properties.getProperty(ES_CONFIG);
-            //LOG.info(esConfig);
             String esPlugins = properties.getProperty(ES_PLUGINS);
-            //LOG.info(esPlugins);
             String esHostPort = properties.getProperty(ES_HOSTPORT);
-            LOG.info(esHostPort);
+            LOG.info("Serde received: "+esHostPort);
             URI parsedLocation = new URI(location);
             HashMap<String, String> query = parseURIQuery(parsedLocation.getQuery());
 
@@ -116,25 +105,6 @@ public class ElasticSearchSerDe implements SerDe {
 
             if (parsedLocation.getPath() == null) {
                 throw new RuntimeException("Missing elasticsearch object type, URI must be formatted as es://<index_name>/<object_type>?<params> or /<index_name>/<object_type>?<params>");
-            }
-
-
-            // Adds the elasticsearch.yml file (esConfig) and the plugins directory (esPlugins) to the distributed cache
-            try {
-                Configuration c = new Configuration();
-                Path hdfsConfigPath = new Path(ES_CONFIG_HDFS_PATH);
-                Path hdfsPluginsPath = new Path(ES_PLUGINS_HDFS_PATH);
-
-                HadoopUtils.uploadLocalFileIfChanged(new Path(LOCAL_SCHEME + esConfig), hdfsConfigPath, c);
-                LOG.info(hdfsConfigPath);
-                LOG.info(new Path(LOCAL_SCHEME + esConfig));
-                HadoopUtils.shipFileIfNotShipped(hdfsConfigPath, c);
-
-                HadoopUtils.uploadLocalFileIfChanged(new Path(LOCAL_SCHEME + esPlugins), hdfsPluginsPath, c);
-                HadoopUtils.shipArchiveIfNotShipped(hdfsPluginsPath, c);
-
-            } catch (Exception e) {
-                throw new RuntimeException(e);
             }
 
             if (conf != null && conf.get(ES_INDEX_NAME) == null) {
@@ -183,9 +153,27 @@ public class ElasticSearchSerDe implements SerDe {
                 // Need to set this to start the local instance of elasticsearch
                 conf.set(ES_CONFIG, esConfig);
                 conf.set(ES_PLUGINS, esPlugins);
-                conf.set(ES_HOSTPORT, esHostPort);
+                if (esHostPort != null) {
+                    conf.set(ES_HOSTPORT, esHostPort);
+                }
+                // Adds the elasticsearch.yml file (esConfig) and the plugins directory (esPlugins) to the distributed cache
+                try {
+                    Path hdfsConfigPath = new Path(ES_CONFIG_HDFS_PATH);
+                    Path hdfsPluginsPath = new Path(ES_PLUGINS_HDFS_PATH);
+
+                    HadoopUtils.uploadLocalFile(new Path(LOCAL_SCHEME + esConfig), hdfsConfigPath, conf);
+                    LOG.info(hdfsConfigPath);
+                    LOG.info(new Path(LOCAL_SCHEME + esConfig));
+                    DistributedCache.addCacheFile(hdfsConfigPath.toUri(), conf);
+
+                    HadoopUtils.uploadLocalFile(new Path(LOCAL_SCHEME + esPlugins), hdfsPluginsPath, conf);
+                    HadoopUtils.shipArchiveIfNotShipped(hdfsPluginsPath, conf);
+
+                } catch (Exception e) {
+                    throw new RuntimeException("Something went wrong",e);
+                }
             } else {
-                LOG.info("Initialize called with null conf!");
+                LOG.debug("Initialize called with null conf");
             }
         } catch (URISyntaxException e) {
             throw new RuntimeException(e);
@@ -205,6 +193,9 @@ public class ElasticSearchSerDe implements SerDe {
         MapWritable record = new MapWritable();
 
         String isJson = props.getProperty(ES_IS_JSON);
+        if ("true".equalsIgnoreCase(isJson)) {
+            throw new SerDeException("Json mode not yet supported");
+        }
         // Handle delimited records (ie. isJson == false)
 
         for (int c = 0; c < numColumns; c++) {
@@ -234,8 +225,6 @@ public class ElasticSearchSerDe implements SerDe {
 
     @Override
     public ObjectInspector getObjectInspector() throws SerDeException {
-        LOG.info("Returning ObjectInspector");
-        LOG.info(rowOI);
         return rowOI;
     }
 
