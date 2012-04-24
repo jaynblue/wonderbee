@@ -10,9 +10,10 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.filecache.DistributedCache;
+import org.apache.log4j.Logger;
 
 public class HadoopUtils {
-    
+    private static final Logger LOG = Logger.getLogger(HadoopUtils.class);
     /**
        Upload a local file to the cluster
      */

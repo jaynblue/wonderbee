@@ -2,6 +2,8 @@
 *.iml
 .\#*
 *~
+*.ipr
+*.iws
 .DS_Store
 Icon?
 REVISION
@@ -48,3 +50,5 @@ doc
 /config/apeyeye.yaml
 /config/routes.rb
 /target
+/.idea/
+
