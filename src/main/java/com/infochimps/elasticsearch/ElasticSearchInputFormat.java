@@ -29,6 +29,7 @@ import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchType;
 
 
+
 /**
    
    A Hadoop InputFormat to read data from an Elasticsearch index. The RecordReader
