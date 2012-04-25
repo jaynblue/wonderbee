@@ -8,7 +8,7 @@ import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.mapreduce.InputSplit;
 
-public class ElasticSearchSplit extends InputSplit implements Writable {
+public class ElasticSearchSplit extends InputSplit implements Writable, org.apache.hadoop.mapred.InputSplit {
 
     private String queryString;
     private long from;

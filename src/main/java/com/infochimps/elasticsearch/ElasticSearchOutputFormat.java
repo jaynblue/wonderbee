@@ -7,8 +7,6 @@ import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
-import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.*;
@@ -42,14 +40,14 @@ import java.util.concurrent.atomic.AtomicLong;
    in a one-hop manner to the elastic search data nodes that will index them.
    
  */
-public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWritable> implements Configurable, HiveOutputFormat<NullWritable,MapWritable> {
+public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWritable> {
     public static final String ES_ACTION_FIELD = "elasticsearch.action.field";
     public static final String ES_SKIP_IF_EXISTS = "es.skip.if.exits";
 
     static Log LOG = LogFactory.getLog(ElasticSearchOutputFormat.class);
     private Configuration conf = null;
 
-    protected class ElasticSearchRecordWriter extends RecordWriter<NullWritable, MapWritable> implements FileSinkOperator.RecordWriter {
+    public class ElasticSearchRecordWriter extends RecordWriter<NullWritable, MapWritable> {
 
         private Node node;
         private Client client;
@@ -155,13 +153,18 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             currentRequest = client.prepareBulk();
         }
 
+
+        public void close(TaskAttemptContext context) throws IOException {
+            close();
+        }
+
         /**
            Closes the connection to elasticsearch. Any documents remaining in the bulkRequest object are indexed.
          */
-        public void close(TaskAttemptContext context) throws IOException {
+        public void close() throws IOException {
             if (currentRequest.numberOfActions() > 0) {            
                 try {
-                    BulkResponse response = currentRequest.execute().actionGet();
+                    executeBulkWrite();
                 } catch (Exception e) {
                     LOG.warn("Bulk request failed: " + e.getMessage());
                     throw new RuntimeException(e);
@@ -288,21 +291,24 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             if (currentRequest.numberOfActions() >= bulkSize) {
                 try {
                     long startTime        = System.currentTimeMillis();
-                    BulkResponse response = currentRequest.execute().actionGet();
+                    executeBulkWrite();
                     totalBulkTime.addAndGet(System.currentTimeMillis() - startTime);
 
                     if (randgen.nextDouble() < 0.1) {
                         LOG.info("Indexed [" + totalBulkItems.get() + "] in [" + (totalBulkTime.get()/1000) + "s] of indexing"+"[" + ((System.currentTimeMillis() - runStartTime)/1000) + "s] of wall clock"+" for ["+ (float)(1000.0*totalBulkItems.get())/(System.currentTimeMillis() - runStartTime) + "rec/s]");
-                    }
-
-                    if(response.hasFailures()) {
-                      throw new ElasticSearchException(response.buildFailureMessage());
                     }
                 } catch (Exception e) {
                     LOG.warn("Bulk request failed: " + e.getMessage());
                     throw new RuntimeException(e);
                 }
                 currentRequest = client.prepareBulk();
+            }
+        }
+
+        private void executeBulkWrite() {
+            BulkResponse response = currentRequest.execute().actionGet();
+            if(response.hasFailures()) {
+                throw new ElasticSearchException(response.buildFailureMessage());
             }
         }
 
@@ -343,32 +349,6 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
             }
 
         }
-
-        @Override
-        public void write(Writable writable) throws IOException {
-            write(NullWritable.get(), (MapWritable) writable);
-        }
-
-        @Override
-        public void close(boolean b) throws IOException {
-            if (currentRequest.numberOfActions() > 0) {
-                try {
-                    BulkResponse response = currentRequest.execute().actionGet();
-                    if(response.hasFailures()) {
-                        throw new ElasticSearchException(response.buildFailureMessage());
-                    }
-                } catch (Exception e) {
-                    LOG.warn("Bulk request failed: " + e.getMessage());
-                    throw new RuntimeException(e);
-                }
-            }
-            client.close();
-            LOG.info("Client is closed");
-            if (node != null) {
-                node.close();
-            }
-            LOG.info("Record writer closed.");
-        }
     }
 
     public RecordWriter<NullWritable, MapWritable> getRecordWriter(final TaskAttemptContext context) throws IOException, InterruptedException {
@@ -376,30 +356,9 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
 
     }
 
-    @Override
-    public FileSinkOperator.RecordWriter getHiveRecordWriter(JobConf entries, final Path path, Class<? extends Writable> aClass, boolean b, Properties tableProperties, final Progressable progressable) throws IOException {
-        final FileSinkOperator.RecordWriter esWriter = new ElasticSearchRecordWriter(entries);
-        final FileSystem fs = path.getFileSystem(entries);
-        return new FileSinkOperator.RecordWriter(){
-            public void write(Writable obj) throws IOException {
-                esWriter.write(obj);
-            }
-            public void close(boolean bool) throws IOException {
-                esWriter.close(bool);
-                //FileSinkOperator will throw an exception if we don't write anything.
-                fs.create(path).close();
-            }
-        };
+    public RecordWriter<NullWritable, MapWritable> getRecordWriter(final JobConf jobConf) throws IOException, InterruptedException {
+        return new ElasticSearchRecordWriter(jobConf);
 
-
-    }
-
-    public void setConf(Configuration conf) {
-        this.conf = conf;
-    }
-
-    public Configuration getConf() {
-        return conf;
     }
 
     @Override
