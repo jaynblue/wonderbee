@@ -1,25 +1,21 @@
-package com.infochimps.elasticsearch;
+package com.infochimps.elasticsearch.hive;
 
-import java.io.IOException;
-import java.util.Map;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Iterator;
-
+import com.infochimps.elasticsearch.ElasticSearchInputFormat;
+import com.infochimps.elasticsearch.ElasticSearchSplit;
+import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-
-import org.apache.hadoop.io.*;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.mapreduce.InputFormat;
-import org.apache.hadoop.mapreduce.RecordReader;
-import org.apache.hadoop.mapreduce.InputSplit;
-import org.apache.hadoop.mapreduce.JobContext;
-import org.apache.hadoop.mapreduce.TaskAttemptContext;
-
-import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
-
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapred.*;
+import org.apache.hadoop.mapred.InputSplit;
+import org.apache.hadoop.mapred.JobContext;
+import org.apache.hadoop.mapred.RecordReader;
+import org.apache.hadoop.mapred.TaskAttemptContext;
+import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.search.SearchType;
+import org.elasticsearch.client.Client;
 import org.elasticsearch.client.transport.TransportClient;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
@@ -27,22 +23,23 @@ import org.elasticsearch.common.transport.InetSocketTransportAddress;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.node.NodeBuilder;
-import org.elasticsearch.client.Client;
 import org.elasticsearch.search.SearchHit;
-import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.action.search.SearchType;
 
-
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 
 /**
-   
-   A Hadoop InputFormat to read data from an Elasticsearch index. The RecordReader
-   divulges records where the key is the record id in elasticsearch and the value
-   is a json string of the (source) record contents.
-   
+ * Created with IntelliJ IDEA.
+ * User: tristan
+ * Date: 4/24/12
+ * Time: 5:01 PM
+ * To change this template use File | Settings | File Templates.
  */
-public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements Configurable {
-
+public class ElasticSearchHiveInputFormat implements InputFormat, Configurable {
     static Log LOG = LogFactory.getLog(ElasticSearchInputFormat.class);
     private Configuration conf = null;
 
@@ -57,11 +54,11 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
     private String objType;
     private String queryString;
     private String hostPort;
-    
+
     private static final String ES_REQUEST_SIZE = "elasticsearch.request.size";           // number of records to fetch at one time
     private static final String ES_NUM_SPLITS = "elasticsearch.num.input.splits";       // number of hadoop map tasks to launch
     private static final String ES_QUERY_STRING = "elasticsearch.query.string";
-    
+
     private static final String ES_CONFIG_NAME = "elasticsearch.yml";
     private static final String ES_PLUGINS_NAME = "plugins";
     private static final String ES_INDEX_NAME = "elasticsearch.index.name";
@@ -70,9 +67,9 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
     private static final String ES_PLUGINS = "es.path.plugins";
     private static final String ES_HOSTPORT = "es.hostport";
     private static final String SLASH = "/";
-    
-    public RecordReader<Text,Text> createRecordReader(InputSplit inputSplit,
-                                                              TaskAttemptContext context) {
+
+    public org.apache.hadoop.mapred.RecordReader<Text,Text> createRecordReader(org.apache.hadoop.mapred.InputSplit inputSplit,
+                                                                                  org.apache.hadoop.mapred.TaskAttemptContext context) {
         return new ElasticSearchRecordReader();
     }
 
@@ -83,23 +80,23 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
 
 
     /**
-       The number of splits is specified in the Hadoop configuration object. 
+     The number of splits is specified in the Hadoop configuration object.
      */
     public List<InputSplit> getSplits() {
 
         List<InputSplit> splits = new ArrayList<InputSplit>(numSplits.intValue());
         for(int i = 0; i < numSplits; i++) {
-            Long size = (numSplitRecords == 1) ? 1 : numSplitRecords-1; 
+            Long size = (numSplitRecords == 1) ? 1 : numSplitRecords-1;
             splits.add(new ElasticSearchSplit(queryString, i*numSplitRecords, size));
         }
         if (numHits % numSplits > 0) splits.add(new ElasticSearchSplit(queryString, numSplits*numSplitRecords, numHits % numSplits - 1));
         LOG.info("Created ["+splits.size()+"] splits for ["+numHits+"] hits");
         return splits;
     }
-    
+
     /**
-       Sets the configuration object, opens a connection to elasticsearch, and
-       initiates the initial search request.
+     Sets the configuration object, opens a connection to elasticsearch, and
+     initiates the initial search request.
      */
     @Override
     public void setConf(Configuration configuration) {
@@ -117,7 +114,7 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
         //
         System.setProperty(ES_CONFIG, conf.get(ES_CONFIG));
         System.setProperty(ES_PLUGINS, conf.get(ES_PLUGINS));
-        
+
         start_embedded_client();
 
         initiate_search();
@@ -129,8 +126,8 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
     }
 
     /**
-       Starts an embedded elasticsearch client (ie. data = false)
-    */
+     Starts an embedded elasticsearch client (ie. data = false)
+     */
     private void start_embedded_client() {
 
         if (this.hostPort != null) {
@@ -155,36 +152,44 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
 
     private void initiate_search() {
         SearchResponse response = client.prepareSearch(indexName)
-            .setTypes(objType)
-            .setSearchType(SearchType.COUNT)
-            .setQuery(QueryBuilders.queryString(queryString))
-            .setSize(requestSize)
-            .execute()
-            .actionGet();
+                .setTypes(objType)
+                .setSearchType(SearchType.COUNT)
+                .setQuery(QueryBuilders.queryString(queryString))
+                .setSize(requestSize)
+                .execute()
+                .actionGet();
         this.numHits = response.hits().totalHits();
         if(numSplits > numHits) numSplits = numHits; // This could be bad
         this.numSplitRecords = (numHits/numSplits);
     }
 
-    protected class ElasticSearchRecordReader extends RecordReader<Text, Text> {
+    @Override
+    public InputSplit[] getSplits(JobConf entries, int i) throws IOException {
+        return new InputSplit[0];  //To change body of implemented methods use File | Settings | File Templates.
+    }
+
+    @Override
+    public RecordReader getRecordReader(InputSplit inputSplit, JobConf entries, Reporter reporter) throws IOException {
+        return null;  //To change body of implemented methods use File | Settings | File Templates.
+    }
+
+    protected class ElasticSearchRecordReader implements RecordReader<Text, Text> {
 
         private Node node;
         private Client client;
-    
+
         private String indexName;
         private String objType;
         private Long numSplitRecords;
         private Integer requestSize;
-        private Text currentKey;
-        private Text currentValue;
         private Integer recordsRead;
-        private Iterator<SearchHit> hitsItr = null;        
+        private Iterator<SearchHit> hitsItr = null;
 
 
         private String queryString;
         private Long from;
         private Long recsToRead;
-        
+
         public ElasticSearchRecordReader() {
         }
 
@@ -218,8 +223,8 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
         }
 
         /**
-           Starts an embedded elasticsearch client (ie. data = false)
-        */
+         Starts an embedded elasticsearch client (ie. data = false)
+         */
         private void start_embedded_client() {
             LOG.info("Starting embedded elasticsearch client ...");
             this.node   = NodeBuilder.nodeBuilder().client(true).node();
@@ -228,23 +233,24 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
 
         private Iterator<SearchHit> fetchNextHits() {
             SearchResponse response = client.prepareSearch(indexName)
-                .setTypes(objType)                
-                .setFrom(from.intValue())
-                .setSize(recsToRead.intValue())
-                .setQuery(QueryBuilders.queryString(queryString))                
-                .execute()
-                .actionGet();
+                    .setTypes(objType)
+                    .setFrom(from.intValue())
+                    .setSize(recsToRead.intValue())
+                    .setQuery(QueryBuilders.queryString(queryString))
+                    .execute()
+                    .actionGet();
             return response.hits().iterator();
         }
-        
+
         @Override
-        public boolean nextKeyValue() throws IOException {
+        public boolean next(Text key, Text value) throws IOException {
             if (hitsItr!=null) {
+                //This should obviously be refactored
                 if (recordsRead < recsToRead) {
                     if (hitsItr.hasNext()) {
                         SearchHit hit = hitsItr.next();
-                        currentKey = new Text(hit.id());
-                        currentValue = new Text(hit.sourceAsString());
+                        key.set(hit.id());
+                        value.set(hit.sourceAsString());
                         recordsRead += 1;
                         return true;
                     }
@@ -256,8 +262,8 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
                     hitsItr = fetchNextHits();
                     if (hitsItr.hasNext()) {
                         SearchHit hit = hitsItr.next();
-                        currentKey = new Text(hit.id());
-                        currentValue = new Text(hit.sourceAsString());
+                        key.set(hit.id());
+                        value.set(hit.sourceAsString());
                         recordsRead += 1;
                         return true;
                     }
@@ -265,20 +271,20 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
             }
             return false;
         }
-    
+
         @Override
-        public Text getCurrentKey() {
-            return currentKey;
+        public Text createKey() {
+            return new Text();
         }
-    
+
         @Override
-        public Text getCurrentValue() {
-            return currentValue;
+        public Text createValue() {
+            return new Text();
         }
-        
+
         @Override
-        public float getProgress() throws IOException {
-            return 0;
+        public long getPos() throws IOException {
+            return 0;  //To change body of implemented methods use File | Settings | File Templates.
         }
 
         @Override
@@ -287,9 +293,14 @@ public class ElasticSearchInputFormat extends InputFormat<Text, Text> implements
             client.close();
             LOG.info("Client is closed");
             if (node != null) {
-                 node.close();
+                node.close();
             }
             LOG.info("Record reader closed.");
+        }
+
+        @Override
+        public float getProgress() throws IOException {
+            return 0;  //To change body of implemented methods use File | Settings | File Templates.
         }
 
     }
