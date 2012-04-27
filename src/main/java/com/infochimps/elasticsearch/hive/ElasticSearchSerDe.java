@@ -44,145 +44,33 @@ public class ElasticSearchSerDe implements SerDe {
     protected ObjectMapper mapper = new ObjectMapper();
 
     // For hadoop configuration
-    private static final String ES_INDEX_NAME = "elasticsearch.index.name";
-    private static final String ES_BULK_SIZE = "elasticsearch.bulk.size";
-    private static final String ES_ID_FIELD_NAME = "elasticsearch.id.field.name";
-    private static final String ES_OBJECT_TYPE = "elasticsearch.object.type";
     private static final String ES_IS_JSON = "elasticsearch.is_json";
-    private static final String PIG_ES_FIELD_NAMES = "elasticsearch.pig.field.names";
-    private static final String ES_REQUEST_SIZE = "elasticsearch.request.size";
-    private static final String ES_NUM_SPLITS = "elasticsearch.num.input.splits";
-    private static final String ES_QUERY_STRING = "elasticsearch.query.string";
 
-    private static final String COMMA = ",";
-    private static final String LOCAL_SCHEME = "file://";
-    private static final String DEFAULT_BULK = "1000";
-    private static final String DEFAULT_ES_CONFIG = "/etc/elasticsearch/elasticsearch.yml";
-    private static final String DEFAULT_ES_PLUGINS = "/usr/local/share/elasticsearch/plugins";
-    private static final String ES_CONFIG_HDFS_PATH = "/tmp/elasticsearch/elasticsearch.yml";
-    private static final String ES_PLUGINS_HDFS_PATH = "/tmp/elasticsearch/plugins";
-    private static final String ES_CONFIG = "es.config";
-    private static final String ES_PLUGINS = "es.path.plugins";
-    private static final String ES_LOCATION = "es.location";
-    private static final String ES_HOSTPORT = "es.hostport";
 
 
     @Override
     public void initialize(Configuration conf, Properties properties) throws SerDeException {
-        try {
-            props = properties;
-            String columnNameProperty = props.getProperty(Constants.LIST_COLUMNS);
-            String columnTypeProperty = props.getProperty(Constants.LIST_COLUMN_TYPES);
-            columnNames = Arrays.asList(columnNameProperty.split(","));
-            columnTypes = TypeInfoUtils.getTypeInfosFromTypeString(columnTypeProperty);
-            assert columnNames.size() == columnTypes.size();
-            numColumns = columnNames.size();
+        LOG.info("SerDe: "+properties);
+        props = properties;
+        String columnNameProperty = props.getProperty(Constants.LIST_COLUMNS);
+        String columnTypeProperty = props.getProperty(Constants.LIST_COLUMN_TYPES);
+        columnNames = Arrays.asList(columnNameProperty.split(","));
+        columnTypes = TypeInfoUtils.getTypeInfosFromTypeString(columnTypeProperty);
+        assert columnNames.size() == columnTypes.size();
+        numColumns = columnNames.size();
 
-            //Build the object inspector based on the types of the columns.  Maybe should just be text?
-            List<ObjectInspector> columnOIs = new ArrayList<ObjectInspector>(columnNames.size());
-            for (int c = 0; c < numColumns; c++) {
-                try {
-                    columnOIs.add(PrimitiveObjectInspectorFactory.getPrimitiveJavaObjectInspector(((PrimitiveTypeInfo) columnTypes.get(c)).getPrimitiveCategory()));
-                } catch (ClassCastException classCast) {
-                    columnOIs.add(ObjectInspectorFactory.getStandardListObjectInspector(PrimitiveObjectInspectorFactory.javaStringObjectInspector));
-                }
+        //Build the object inspector based on the types of the columns.  Maybe should just be text?
+        List<ObjectInspector> columnOIs = new ArrayList<ObjectInspector>(columnNames.size());
+        for (int c = 0; c < numColumns; c++) {
+            try {
+                columnOIs.add(PrimitiveObjectInspectorFactory.getPrimitiveJavaObjectInspector(((PrimitiveTypeInfo) columnTypes.get(c)).getPrimitiveCategory()));
+            } catch (ClassCastException classCast) {
+                columnOIs.add(ObjectInspectorFactory.getStandardListObjectInspector(PrimitiveObjectInspectorFactory.javaStringObjectInspector));
             }
-            rowOI = ObjectInspectorFactory.getStandardStructObjectInspector(columnNames, columnOIs);
-
-            // Parse the passed in location URI, pulling out the arguments as well
-            String location = properties.getProperty(ES_LOCATION);
-            String esConfig = properties.getProperty(ES_CONFIG);
-            String esPlugins = properties.getProperty(ES_PLUGINS);
-            String esHostPort = properties.getProperty(ES_HOSTPORT);
-            LOG.info("Serde received: "+esHostPort);
-            URI parsedLocation = new URI(location);
-            HashMap<String, String> query = parseURIQuery(parsedLocation.getQuery());
-
-            String scheme = "es://";
-            if (!location.startsWith(scheme)) {
-                scheme = "/";
-            }
-
-            String esHost = location.substring(scheme.length()).split("/")[0];
-            if (esHost == null) {
-                throw new RuntimeException("Missing elasticsearch index name, URI must be formatted as es://<index_name>/<object_type>?<params> or /<index_name>/<object_type>?<params>");
-            }
-
-            if (parsedLocation.getPath() == null) {
-                throw new RuntimeException("Missing elasticsearch object type, URI must be formatted as es://<index_name>/<object_type>?<params> or /<index_name>/<object_type>?<params>");
-            }
-
-            if (conf != null && conf.get(ES_INDEX_NAME) == null) {
-
-                // Set elasticsearch index and object type in the Hadoop configuration
-                conf.set(ES_INDEX_NAME, esHost);
-                conf.set(ES_OBJECT_TYPE, parsedLocation.getPath().replaceAll(".*/", ""));
-
-                // Set the request size in the Hadoop configuration
-                String requestSize = query.get("size");
-                if (requestSize == null) requestSize = DEFAULT_BULK;
-                conf.set(ES_BULK_SIZE, requestSize);
-                conf.set(ES_REQUEST_SIZE, requestSize);
-
-                // Set the id field name in the Hadoop configuration
-                String idFieldName = query.get("id");
-                if (idFieldName == null) idFieldName = "-1";
-                conf.set(ES_ID_FIELD_NAME, idFieldName);
-
-                String queryString = query.get("q");
-                if (queryString == null) queryString = "*";
-                conf.set(ES_QUERY_STRING, queryString);
-
-                String numTasks = query.get("tasks");
-                if (numTasks == null) numTasks = "100";
-                conf.set(ES_NUM_SPLITS, numTasks);
-
-                String actionField = query.get("action");
-                if (actionField != null) {
-                    conf.set(ElasticSearchOutputFormat.ES_ACTION_FIELD, actionField);
-                }
-
-                String skipIfExists = query.get("createnew");
-                if ("true".equalsIgnoreCase(skipIfExists)) {
-                    conf.set(ElasticSearchOutputFormat.ES_SKIP_IF_EXISTS, "true");
-                }
-
-                //
-                // This gets set even when loading data from elasticsearch
-                //
-                String isJson = query.get("json");
-                if (isJson == null || isJson.equals("false")) {
-                    props.setProperty(ES_IS_JSON, "false");
-                }
-
-                // Need to set this to start the local instance of elasticsearch
-                conf.set(ES_CONFIG, esConfig);
-                conf.set(ES_PLUGINS, esPlugins);
-                if (esHostPort != null) {
-                    conf.set(ES_HOSTPORT, esHostPort);
-                }
-                // Adds the elasticsearch.yml file (esConfig) and the plugins directory (esPlugins) to the distributed cache
-                try {
-                    Path hdfsConfigPath = new Path(ES_CONFIG_HDFS_PATH);
-                    Path hdfsPluginsPath = new Path(ES_PLUGINS_HDFS_PATH);
-
-                    HadoopUtils.uploadLocalFile(new Path(LOCAL_SCHEME + esConfig), hdfsConfigPath, conf);
-                    LOG.info(hdfsConfigPath);
-                    LOG.info(new Path(LOCAL_SCHEME + esConfig));
-                    DistributedCache.addCacheFile(hdfsConfigPath.toUri(), conf);
-
-                    HadoopUtils.uploadLocalFile(new Path(LOCAL_SCHEME + esPlugins), hdfsPluginsPath, conf);
-                    HadoopUtils.shipArchiveIfNotShipped(hdfsPluginsPath, conf);
-
-                } catch (Exception e) {
-                    throw new RuntimeException("Something went wrong",e);
-                }
-            } else {
-                LOG.debug("Initialize called with null conf");
-            }
-        } catch (URISyntaxException e) {
-            throw new RuntimeException(e);
         }
+        rowOI = ObjectInspectorFactory.getStandardStructObjectInspector(columnNames, columnOIs);
+
+
     }
 
     @Override
@@ -264,22 +152,6 @@ public class ElasticSearchSerDe implements SerDe {
     @Override
     public ObjectInspector getObjectInspector() throws SerDeException {
         return rowOI;
-    }
-
-    /**
-     * Given a URI query string, eg. "foo=bar&happy=true" returns
-     * a hashmap ({'foo' => 'bar', 'happy' => 'true'})
-     */
-    private HashMap<String, String> parseURIQuery(String query) {
-        HashMap<String, String> argMap = new HashMap<String, String>();
-        if (query != null) {
-            String[] pairs = query.split("&");
-            for (String pair : pairs) {
-                String[] splitPair = pair.split("=");
-                argMap.put(splitPair[0], splitPair[1]);
-            }
-        }
-        return argMap;
     }
 
     /**

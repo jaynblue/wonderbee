@@ -137,6 +137,7 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
                 if (hostPort != null) {
                     LOG.info("Using transport client to load to "+hostPort);
                 }
+
                 String taskConfigPath = HadoopUtils.fetchFileFromCache(ES_CONFIG_NAME, conf);
                 LOG.info("Using ["+taskConfigPath+"] as es.config");
                 String taskPluginsPath = HadoopUtils.fetchArchiveFromCache(ES_PLUGINS_NAME, conf);
