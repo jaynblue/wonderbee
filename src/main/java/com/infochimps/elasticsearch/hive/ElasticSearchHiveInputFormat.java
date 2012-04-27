@@ -1,12 +1,12 @@
 package com.infochimps.elasticsearch.hive;
 
-import com.infochimps.elasticsearch.ElasticSearchInputFormat;
 import com.infochimps.elasticsearch.ElasticSearchSplit;
 import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hive.ql.io.HiveInputFormat;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.*;
 import org.apache.hadoop.mapred.InputSplit;
@@ -33,14 +33,24 @@ import java.util.Iterator;
 import java.util.List;
 
 /**
- * Created with IntelliJ IDEA.
- * User: tristan
- * Date: 4/24/12
- * Time: 5:01 PM
- * To change this template use File | Settings | File Templates.
+ * Copyright (c) 2012 klout.com
+ *
+ * Based on work Copyright (c) Infochimps
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-public class ElasticSearchHiveInputFormat implements InputFormat, Configurable {
-    static Log LOG = LogFactory.getLog(ElasticSearchInputFormat.class);
+public class ElasticSearchHiveInputFormat implements InputFormat {
+    static Log LOG = LogFactory.getLog(ElasticSearchHiveInputFormat.class);
     private Configuration conf = null;
 
     private Node node;
@@ -68,61 +78,39 @@ public class ElasticSearchHiveInputFormat implements InputFormat, Configurable {
     private static final String ES_HOSTPORT = "es.hostport";
     private static final String SLASH = "/";
 
-    public org.apache.hadoop.mapred.RecordReader<Text,Text> createRecordReader(org.apache.hadoop.mapred.InputSplit inputSplit,
-                                                                                  org.apache.hadoop.mapred.TaskAttemptContext context) {
-        return new ElasticSearchRecordReader();
-    }
-
-    public List<InputSplit> getSplits(JobContext context) {
-        setConf(context.getConfiguration());
-        return getSplits();
-    }
-
-
     /**
      The number of splits is specified in the Hadoop configuration object.
      */
-    public List<InputSplit> getSplits() {
-
-        List<InputSplit> splits = new ArrayList<InputSplit>(numSplits.intValue());
-        for(int i = 0; i < numSplits; i++) {
-            Long size = (numSplitRecords == 1) ? 1 : numSplitRecords-1;
-            splits.add(new ElasticSearchSplit(queryString, i*numSplitRecords, size));
-        }
-        if (numHits % numSplits > 0) splits.add(new ElasticSearchSplit(queryString, numSplits*numSplitRecords, numHits % numSplits - 1));
-        LOG.info("Created ["+splits.size()+"] splits for ["+numHits+"] hits");
-        return splits;
-    }
-
-    /**
-     Sets the configuration object, opens a connection to elasticsearch, and
-     initiates the initial search request.
-     */
-    @Override
-    public void setConf(Configuration configuration) {
-        this.conf = configuration;
+    public InputSplit[] getSplits(JobConf conf, int j) {
+        this.conf = conf;
         this.indexName = conf.get(ES_INDEX_NAME);
         this.objType = conf.get(ES_OBJECT_TYPE);
-        this.requestSize = Integer.parseInt(conf.get(ES_REQUEST_SIZE));
-        this.numSplits = Long.parseLong(conf.get(ES_NUM_SPLITS));
-        this.queryString = conf.get(ES_QUERY_STRING);
+        this.requestSize = Integer.parseInt(conf.get(ES_REQUEST_SIZE,"100"));
+        this.numSplits = Long.parseLong(conf.get(ES_NUM_SPLITS,"10"));
+        this.queryString = conf.get(ES_QUERY_STRING,"{\"query\":{\"match_all\":{}}}");
         this.hostPort = conf.get(ES_HOSTPORT);
         //
         // Need to ensure that this is set in the hadoop configuration so we can
         // instantiate a local client. The reason is that no files are in the
         // distributed cache when this is called.
         //
+
+
         System.setProperty(ES_CONFIG, conf.get(ES_CONFIG));
         System.setProperty(ES_PLUGINS, conf.get(ES_PLUGINS));
 
         start_embedded_client();
 
         initiate_search();
-    }
 
-    @Override
-    public Configuration getConf() {
-        return conf;
+        List<InputSplit> splits = new ArrayList<InputSplit>(numSplits.intValue());
+        for(int i = 0; i < numSplits; i++) {
+            Long size = (numSplitRecords == 1) ? 1 : numSplitRecords-1;
+            splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(queryString, i*numSplitRecords, size, hostPort.split(":")[0]),"ElasticSearchSplit"));
+        }
+        if (numHits % numSplits > 0) splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(queryString, numSplits*numSplitRecords, numHits % numSplits - 1,hostPort.split(":")[0]),"ElasticSearchSplit"));
+        LOG.info("Created ["+splits.size()+"] splits for ["+numHits+"] hits");
+        return splits.toArray(new InputSplit[splits.size()]);
     }
 
     /**
@@ -163,14 +151,12 @@ public class ElasticSearchHiveInputFormat implements InputFormat, Configurable {
         this.numSplitRecords = (numHits/numSplits);
     }
 
-    @Override
-    public InputSplit[] getSplits(JobConf entries, int i) throws IOException {
-        return new InputSplit[0];  //To change body of implemented methods use File | Settings | File Templates.
-    }
 
     @Override
-    public RecordReader getRecordReader(InputSplit inputSplit, JobConf entries, Reporter reporter) throws IOException {
-        return null;  //To change body of implemented methods use File | Settings | File Templates.
+    public RecordReader getRecordReader(InputSplit inputSplit, JobConf conf, Reporter reporter) throws IOException {
+        ElasticSearchRecordReader reader = new ElasticSearchRecordReader();
+        reader.initialize(inputSplit,conf);
+        return reader;
     }
 
     protected class ElasticSearchRecordReader implements RecordReader<Text, Text> {
@@ -184,17 +170,15 @@ public class ElasticSearchHiveInputFormat implements InputFormat, Configurable {
         private Integer requestSize;
         private Integer recordsRead;
         private Iterator<SearchHit> hitsItr = null;
-
+        private String hostPort;
 
         private String queryString;
         private Long from;
         private Long recsToRead;
 
-        public ElasticSearchRecordReader() {
-        }
+        public ElasticSearchRecordReader() {}
 
-        public void initialize(InputSplit split, TaskAttemptContext context) throws IOException {
-            Configuration conf = context.getConfiguration();
+        public void initialize(InputSplit split, JobConf conf) throws IOException {
             this.indexName = conf.get(ES_INDEX_NAME);
             this.objType    = conf.get(ES_OBJECT_TYPE);
             LOG.info("Initializing elasticsearch record reader on index ["+indexName+"] and object type ["+objType+"]");
@@ -203,20 +187,39 @@ public class ElasticSearchHiveInputFormat implements InputFormat, Configurable {
             // Fetches elasticsearch.yml and the plugins directory from the distributed cache
             //
             try {
+
                 String taskConfigPath = HadoopUtils.fetchFileFromCache(ES_CONFIG_NAME, conf);
                 LOG.info("Using ["+taskConfigPath+"] as es.config");
                 String taskPluginsPath = HadoopUtils.fetchArchiveFromCache(ES_PLUGINS_NAME, conf);
                 LOG.info("Using ["+taskPluginsPath+"] as es.plugins.dir");
                 System.setProperty(ES_CONFIG, taskConfigPath);
                 System.setProperty(ES_PLUGINS, taskPluginsPath+SLASH+ES_PLUGINS_NAME);
+
+
+
+//                String taskConfigPath = null;
+//                String taskPluginsPath = null;
+//                try {
+//                    taskConfigPath = HadoopUtils.fetchFileFromCache(ES_CONFIG_NAME, conf);
+//                    taskPluginsPath = HadoopUtils.fetchArchiveFromCache(ES_PLUGINS_NAME, conf);
+//                } catch (IOException e) {
+//                    e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+//                }
+//                LOG.info("input format got "+taskConfigPath+" for config and "+taskPluginsPath+" for plugins");
+//
+//
+//                System.setProperty(ES_CONFIG,  taskConfigPath);
+//                System.setProperty(ES_PLUGINS, taskPluginsPath);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
-
-            queryString = ((ElasticSearchSplit)split).getQueryString();
-            from = ((ElasticSearchSplit)split).getFrom();
-            recsToRead = ((ElasticSearchSplit)split).getSize();
-
+            HiveInputFormat.HiveInputSplit hiveSplit = (HiveInputFormat.HiveInputSplit)split;
+            LOG.info("hivesplit contains: "+hiveSplit.inputFormatClassName());
+            ElasticSearchSplit esSplit = (ElasticSearchSplit)(hiveSplit.getInputSplit());
+            queryString = esSplit.getQueryString();
+            from = esSplit.getFrom();
+            recsToRead = esSplit.getSize();
+            hostPort = conf.get(ES_HOSTPORT);
             LOG.info("elasticsearch record reader: query ["+queryString+"], from ["+from+"], size ["+recsToRead+"]");
             start_embedded_client();
             recordsRead = 0;
@@ -226,9 +229,23 @@ public class ElasticSearchHiveInputFormat implements InputFormat, Configurable {
          Starts an embedded elasticsearch client (ie. data = false)
          */
         private void start_embedded_client() {
-            LOG.info("Starting embedded elasticsearch client ...");
-            this.node   = NodeBuilder.nodeBuilder().client(true).node();
-            this.client = node.client();
+            if (this.hostPort != null) {
+                LOG.info("Starting transport elasticsearch client ...");
+                Settings settings = ImmutableSettings.settingsBuilder()
+                        .put("client.transport.sniff", true).build();
+                String[] split = this.hostPort.split(":");
+                String host = split[0];
+                int port = Integer.decode(split[1]);
+
+                this.client = new TransportClient()
+                        .addTransportAddress(new InetSocketTransportAddress(host, port));
+                LOG.info("Transport client started");
+            } else {
+                LOG.info("Starting embedded elasticsearch client ...");
+                this.node   = NodeBuilder.nodeBuilder().client(true).node();
+                this.client = node.client();
+                LOG.info("Embedded elasticsearch client started");
+            }
         }
 
         private Iterator<SearchHit> fetchNextHits() {
@@ -249,6 +266,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat, Configurable {
                 if (recordsRead < recsToRead) {
                     if (hitsItr.hasNext()) {
                         SearchHit hit = hitsItr.next();
+                        LOG.info(hit.sourceAsString());
                         key.set(hit.id());
                         value.set(hit.sourceAsString());
                         recordsRead += 1;
@@ -262,6 +280,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat, Configurable {
                     hitsItr = fetchNextHits();
                     if (hitsItr.hasNext()) {
                         SearchHit hit = hitsItr.next();
+                        LOG.info(hit.sourceAsString());
                         key.set(hit.id());
                         value.set(hit.sourceAsString());
                         recordsRead += 1;

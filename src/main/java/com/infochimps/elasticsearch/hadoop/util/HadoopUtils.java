@@ -4,6 +4,7 @@ import java.io.File;
 
 import java.io.IOException;
 import java.io.FileNotFoundException;
+import java.util.Arrays;
 
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileStatus;
@@ -11,6 +12,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.filecache.DistributedCache;
 import org.apache.log4j.Logger;
+import org.elasticsearch.common.collect.Lists;
 
 public class HadoopUtils {
     private static final Logger LOG = Logger.getLogger(HadoopUtils.class);
@@ -48,6 +50,14 @@ public class HadoopUtils {
      */
     public static String fetchFileFromCache(String basename, Configuration conf) throws IOException {
         Path[] cacheFiles = DistributedCache.getLocalCacheFiles(conf);
+        if (cacheFiles != null) {
+            for (Path p : cacheFiles) {
+                LOG.info(p);
+            }
+        }  else {
+            LOG.info("no local cache files");
+        }
+
         if (cacheFiles != null && cacheFiles.length > 0) {
             for (Path cacheFile : cacheFiles) {
                 if (cacheFile.getName().equals(basename)) {
@@ -63,6 +73,13 @@ public class HadoopUtils {
      */
     public static String fetchArchiveFromCache(String basename, Configuration conf) throws IOException {
         Path[] cacheArchives = DistributedCache.getLocalCacheArchives(conf);
+        if (cacheArchives != null) {
+            for (Path p : cacheArchives) {
+                LOG.info(p);
+            }
+        }  else {
+            LOG.info("no local cache files");
+        }
         if (cacheArchives != null && cacheArchives.length > 0) {
             for (Path cacheArchive : cacheArchives) {
                 if (cacheArchive.getName().equals(basename)) {
@@ -79,6 +96,7 @@ public class HadoopUtils {
     public static void shipFileIfNotShipped(Path hdfsPath, Configuration conf) throws IOException {
         if (fetchFileFromCache(hdfsPath.getName(), conf) == null) {
             try {
+                LOG.info("shipping file!");
                 DistributedCache.addCacheFile(hdfsPath.toUri(), conf);
             } catch (Exception e) {
                 throw new RuntimeException(e);
@@ -92,6 +110,7 @@ public class HadoopUtils {
     public static void shipArchiveIfNotShipped(Path hdfsPath, Configuration conf) throws IOException {
         if (fetchArchiveFromCache(hdfsPath.getName(), conf) == null) {
             try {
+                LOG.info("shipping archive!");
                 DistributedCache.addCacheArchive(hdfsPath.toUri(), conf);
             } catch (Exception e) {
                 throw new RuntimeException(e);
