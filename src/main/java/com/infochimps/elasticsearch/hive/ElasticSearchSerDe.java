@@ -15,16 +15,15 @@ import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils;
 import org.apache.hadoop.io.*;
 import org.apache.log4j.Logger;
-import org.codehaus.jackson.JsonNode;
-import org.codehaus.jackson.map.ObjectMapper;
-import org.codehaus.jackson.JsonParseException;
-import org.codehaus.jackson.map.JsonMappingException;
-import org.codehaus.jackson.map.util.JSONPObject;
 
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.*;
+
+import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 
 /**
  * Created with IntelliJ IDEA.
@@ -41,7 +40,7 @@ public class ElasticSearchSerDe implements SerDe {
     private List<String> columnNames;
     private List<TypeInfo> columnTypes;
     private Properties props;
-    protected ObjectMapper mapper = new ObjectMapper();
+    protected JSONParser parser=new JSONParser();
 
     // For hadoop configuration
     private static final String ES_IS_JSON = "elasticsearch.is_json";
@@ -114,33 +113,31 @@ public class ElasticSearchSerDe implements SerDe {
     @Override
     public Object deserialize(Writable writable) throws SerDeException {
         String jsonText = ((Text) writable).toString();
-        JsonNode json;
+        JSONObject jsonObj;
         try {
-            json = mapper.readTree(jsonText);
-        } catch (IOException e) {
-            throw new SerDeException(e);
-
-        }
+            jsonObj = (JSONObject) parser.parse(jsonText);
+        } catch (ParseException e) {
+            throw new SerDeException(e);        }
         List<Object> result = new ArrayList<Object>();
         for (int i = 0; i < numColumns; i++) {
             // LOG.error("Processing column: " + i + " name: " + columnNames.get(i));
             String columnName = columnNames.get(i);
-            JsonNode jsonValue = json.get(columnName);
+            Object jsonValue = jsonObj.get(columnName);
             Object value = null;
             if (jsonValue != null) {
                 TypeInfo type = columnTypes.get(i);
                 if (type.getTypeName().equals(Constants.BIGINT_TYPE_NAME)) {
-                    value = jsonValue.getLongValue();
+                    value = ((Number)jsonValue).longValue();
                 } else if (type.getTypeName().equals(Constants.STRING_TYPE_NAME)) {
-                    value = jsonValue.getTextValue();
+                    value = jsonValue;
                 } else if (type.getTypeName().equals(Constants.INT_TYPE_NAME)) {
-                    value = jsonValue.getIntValue();
+                    value = ((Number)jsonValue).intValue();
                 } else if (type.getTypeName().equals(Constants.FLOAT_TYPE_NAME)) {
-                    value = jsonValue.getNumberValue().floatValue();
+                    value = ((Number)jsonValue).floatValue();
                 } else if (type.getTypeName().equals(Constants.BOOLEAN_TYPE_NAME)) {
-                    value = jsonValue.getBooleanValue();
+                    value = jsonValue;
                 } else if (type.getTypeName().equals(Constants.DOUBLE_TYPE_NAME)) {
-                    value = jsonValue.getDoubleValue();
+                    value = ((Number)jsonValue).doubleValue();
                 }
             }
 

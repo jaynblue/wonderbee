@@ -13,6 +13,10 @@ import org.apache.hadoop.mapred.InputSplit;
 import org.apache.hadoop.mapred.JobContext;
 import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hadoop.mapred.TaskAttemptContext;
+import org.elasticsearch.action.admin.indices.segments.IndexSegments;
+import org.elasticsearch.action.admin.indices.segments.IndexShardSegments;
+import org.elasticsearch.action.admin.indices.segments.IndicesSegmentsRequest;
+import org.elasticsearch.action.admin.indices.segments.ShardSegments;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.client.Client;
@@ -20,6 +24,7 @@ import org.elasticsearch.client.transport.TransportClient;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
+import org.elasticsearch.index.engine.Segment;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.node.NodeBuilder;
@@ -28,9 +33,8 @@ import org.elasticsearch.search.SearchHit;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.ExecutionException;
 
 /**
  * Copyright (c) 2012 klout.com
@@ -88,7 +92,9 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
         this.requestSize = Integer.parseInt(conf.get(ES_REQUEST_SIZE,"100"));
         this.numSplits = Long.parseLong(conf.get(ES_NUM_SPLITS,"10"));
         this.queryString = conf.get(ES_QUERY_STRING,"{\"query\":{\"match_all\":{}}}");
-        this.hostPort = conf.get(ES_HOSTPORT);
+
+        this.hostPort = conf.get(ElasticSearchStorageHandler.ES_HOSTPORT);
+        LOG.info("getSplits called with hostPort " + hostPort);
         //
         // Need to ensure that this is set in the hadoop configuration so we can
         // instantiate a local client. The reason is that no files are in the
@@ -103,12 +109,29 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
 
         initiate_search();
 
+        try {
+            IndexSegments segments = this.client.admin().indices().segments(new IndicesSegmentsRequest()).get().getIndices().get(this.indexName);
+            for (IndexShardSegments segment : segments) {
+                LOG.info(segment.getShardId().getId());
+                for (ShardSegments seg : segment.getShards()) {
+                    LOG.info(seg.getShardRouting().currentNodeId());
+                }
+            }
+
+        } catch (InterruptedException e) {
+            e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+        } catch (ExecutionException e) {
+            e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+        }
+
         List<InputSplit> splits = new ArrayList<InputSplit>(numSplits.intValue());
+
+        String tableName = conf.get("mapred.input.dir");
         for(int i = 0; i < numSplits; i++) {
             Long size = (numSplitRecords == 1) ? 1 : numSplitRecords-1;
-            splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(queryString, i*numSplitRecords, size, hostPort.split(":")[0]),"ElasticSearchSplit"));
+            splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(queryString, i*numSplitRecords, size, hostPort.split(":")[0],tableName+"/"+i),"ElasticSearchSplit"));
         }
-        if (numHits % numSplits > 0) splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(queryString, numSplits*numSplitRecords, numHits % numSplits - 1,hostPort.split(":")[0]),"ElasticSearchSplit"));
+        if (numHits % numSplits > 0) splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(queryString, numSplits*numSplitRecords, numHits % numSplits - 1,hostPort.split(":")[0],tableName+"/"+numSplits),"ElasticSearchSplit"));
         LOG.info("Created ["+splits.size()+"] splits for ["+numHits+"] hits");
         return splits.toArray(new InputSplit[splits.size()]);
     }
@@ -118,7 +141,6 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
      */
     private void start_embedded_client() {
 
-        if (this.hostPort != null) {
             LOG.info("Starting transport elasticsearch client ...");
             Settings settings = ImmutableSettings.settingsBuilder()
                     .put("client.transport.sniff", true).build();
@@ -129,12 +151,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
             this.client = new TransportClient()
                     .addTransportAddress(new InetSocketTransportAddress(host, port));
             LOG.info("Transport client started");
-        } else {
-            LOG.info("Starting embedded elasticsearch client ...");
-            this.node   = NodeBuilder.nodeBuilder().client(true).node();
-            this.client = node.client();
-            LOG.info("Embedded elasticsearch client started");
-        }
+
 
     }
 
@@ -154,7 +171,13 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
 
     @Override
     public RecordReader getRecordReader(InputSplit inputSplit, JobConf conf, Reporter reporter) throws IOException {
+        Thread.dumpStack();
         ElasticSearchRecordReader reader = new ElasticSearchRecordReader();
+        LOG.info("getRecordReader called with conf containing hostport " + conf.get(ES_HOSTPORT));
+        for (Map.Entry<String,String> entry : conf) {
+            LOG.info(entry);
+        }
+        conf.reloadConfiguration();
         reader.initialize(inputSplit,conf);
         return reader;
     }
@@ -214,7 +237,6 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
                 throw new RuntimeException(e);
             }
             HiveInputFormat.HiveInputSplit hiveSplit = (HiveInputFormat.HiveInputSplit)split;
-            LOG.info("hivesplit contains: "+hiveSplit.inputFormatClassName());
             ElasticSearchSplit esSplit = (ElasticSearchSplit)(hiveSplit.getInputSplit());
             queryString = esSplit.getQueryString();
             from = esSplit.getFrom();
@@ -266,7 +288,6 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
                 if (recordsRead < recsToRead) {
                     if (hitsItr.hasNext()) {
                         SearchHit hit = hitsItr.next();
-                        LOG.info(hit.sourceAsString());
                         key.set(hit.id());
                         value.set(hit.sourceAsString());
                         recordsRead += 1;
@@ -280,7 +301,6 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
                     hitsItr = fetchNextHits();
                     if (hitsItr.hasNext()) {
                         SearchHit hit = hitsItr.next();
-                        LOG.info(hit.sourceAsString());
                         key.set(hit.id());
                         value.set(hit.sourceAsString());
                         recordsRead += 1;

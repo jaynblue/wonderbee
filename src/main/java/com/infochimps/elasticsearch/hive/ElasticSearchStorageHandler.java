@@ -9,6 +9,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.metastore.HiveMetaHook;
 import org.apache.hadoop.hive.metastore.api.MetaException;
 import org.apache.hadoop.hive.metastore.api.Table;
+import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
 import org.apache.hadoop.hive.serde2.SerDe;
@@ -40,23 +41,23 @@ import java.util.Properties;
  */
 public class ElasticSearchStorageHandler implements HiveStorageHandler {
 
-    private static final String ES_INDEX_NAME = "elasticsearch.index.name";
-    private static final String ES_BULK_SIZE = "elasticsearch.bulk.size";
-    private static final String ES_ID_FIELD_NAME = "elasticsearch.id.field.name";
-    private static final String ES_OBJECT_TYPE = "elasticsearch.object.type";
-    private static final String ES_IS_JSON = "elasticsearch.is_json";
-    private static final String PIG_ES_FIELD_NAMES = "elasticsearch.pig.field.names";
-    private static final String ES_REQUEST_SIZE = "elasticsearch.request.size";
-    private static final String ES_NUM_SPLITS = "elasticsearch.num.input.splits";
-    private static final String ES_QUERY_STRING = "elasticsearch.query.string";
+    public static final String ES_INDEX_NAME = "elasticsearch.index.name";
+    public static final String ES_BULK_SIZE = "elasticsearch.bulk.size";
+    public static final String ES_ID_FIELD_NAME = "elasticsearch.id.field.name";
+    public static final String ES_OBJECT_TYPE = "elasticsearch.object.type";
+    public static final String ES_IS_JSON = "elasticsearch.is_json";
+    public static final String PIG_ES_FIELD_NAMES = "elasticsearch.pig.field.names";
+    public static final String ES_REQUEST_SIZE = "elasticsearch.request.size";
+    public static final String ES_NUM_SPLITS = "elasticsearch.num.input.splits";
+    public static final String ES_QUERY_STRING = "elasticsearch.query.string";
 
-    private static final String COMMA = ",";
-    private static final String LOCAL_SCHEME = "file://";
-    private static final String DEFAULT_BULK = "1000";
-    private static final String DEFAULT_ES_CONFIG = "/etc/elasticsearch/elasticsearch.yml";
-    private static final String DEFAULT_ES_PLUGINS = "/usr/local/share/elasticsearch/plugins";
-    private static final String ES_CONFIG_HDFS_PATH = "/tmp/elasticsearch/elasticsearch.yml";
-    private static final String ES_PLUGINS_HDFS_PATH = "/tmp/elasticsearch/plugins";
+    public static final String COMMA = ",";
+    public static final String LOCAL_SCHEME = "file://";
+    public static final String DEFAULT_BULK = "1000";
+    public static final String DEFAULT_ES_CONFIG = "/etc/elasticsearch/elasticsearch.yml";
+    public static final String DEFAULT_ES_PLUGINS = "/usr/local/share/elasticsearch/plugins";
+    public static final String ES_CONFIG_HDFS_PATH = "/tmp/elasticsearch/elasticsearch.yml";
+    public static final String ES_PLUGINS_HDFS_PATH = "/tmp/elasticsearch/plugins";
     public static final String ES_CONFIG = "es.config";
     public static final String ES_PLUGINS = "es.path.plugins";
     public static final String ES_LOCATION = "es.location";
@@ -139,7 +140,7 @@ public class ElasticSearchStorageHandler implements HiveStorageHandler {
                 jobProperties.put(ES_QUERY_STRING, queryString);
 
                 String numTasks = query.get("tasks");
-                if (numTasks == null) numTasks = "100";
+                if (numTasks == null) numTasks = "10";
                 jobProperties.put(ES_NUM_SPLITS, numTasks);
 
                 String actionField = query.get("action");
@@ -165,9 +166,9 @@ public class ElasticSearchStorageHandler implements HiveStorageHandler {
                 jobProperties.put(ES_CONFIG, esConfig);
                 LOG.info("storage handler set \"es.path.plugins\" to " + esPlugins);
                 jobProperties.put(ES_PLUGINS, esPlugins);
-                if (esHostPort != null) {
-                    jobProperties.put(ES_HOSTPORT, esHostPort);
-                }
+                LOG.info("storage handler set \"es.hostport\" to " + esHostPort);
+                jobProperties.put(ES_HOSTPORT, esHostPort);
+
                 // Adds the elasticsearch.yml file (esConfig) and the plugins directory (esPlugins) to the distributed cache
             } else {
                 LOG.debug("Initialize called with null conf");
