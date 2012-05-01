@@ -6,13 +6,22 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hive.ql.exec.Utilities;
+import org.apache.hadoop.hive.ql.index.IndexPredicateAnalyzer;
+import org.apache.hadoop.hive.ql.index.IndexSearchCondition;
 import org.apache.hadoop.hive.ql.io.HiveInputFormat;
+import org.apache.hadoop.hive.ql.plan.ExprNodeDesc;
+import org.apache.hadoop.hive.ql.plan.TableScanDesc;
+import org.apache.hadoop.hive.serde.Constants;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.*;
 import org.apache.hadoop.mapred.InputSplit;
-import org.apache.hadoop.mapred.JobContext;
 import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hadoop.mapred.TaskAttemptContext;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.*;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.elasticsearch.action.admin.indices.segments.IndexSegments;
 import org.elasticsearch.action.admin.indices.segments.IndexShardSegments;
 import org.elasticsearch.action.admin.indices.segments.IndicesSegmentsRequest;
@@ -25,16 +34,20 @@ import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
 import org.elasticsearch.index.engine.Segment;
+import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.node.NodeBuilder;
 import org.elasticsearch.search.SearchHit;
-
+import org.apache.hadoop.mapreduce.JobContext;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
+import org.elasticsearch.index.query.QueryBuilder;
+import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
+import static org.elasticsearch.index.query.QueryBuilders.termQuery;
 
 /**
  * Copyright (c) 2012 klout.com
@@ -66,7 +79,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
     private Long numSplitRecords;
     private String indexName;
     private String objType;
-    private String queryString;
+    private QueryBuilder queryBuilder;
     private String hostPort;
 
     private static final String ES_REQUEST_SIZE = "elasticsearch.request.size";           // number of records to fetch at one time
@@ -85,13 +98,13 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
     /**
      The number of splits is specified in the Hadoop configuration object.
      */
-    public InputSplit[] getSplits(JobConf conf, int j) {
+    public InputSplit[] getSplits(JobConf conf, int j) throws IOException {
         this.conf = conf;
         this.indexName = conf.get(ES_INDEX_NAME);
         this.objType = conf.get(ES_OBJECT_TYPE);
-        this.requestSize = Integer.parseInt(conf.get(ES_REQUEST_SIZE,"100"));
-        this.numSplits = Long.parseLong(conf.get(ES_NUM_SPLITS,"10"));
-        this.queryString = conf.get(ES_QUERY_STRING,"{\"query\":{\"match_all\":{}}}");
+        this.requestSize = Integer.parseInt(conf.get(ES_REQUEST_SIZE, "100"));
+        this.numSplits = Long.parseLong(conf.get(ES_NUM_SPLITS, "10"));
+        this.queryBuilder = getPushedDownPredicateQueryBuilder(conf);
 
         this.hostPort = conf.get(ElasticSearchStorageHandler.ES_HOSTPORT);
         LOG.info("getSplits called with hostPort " + hostPort);
@@ -126,12 +139,14 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
 
         List<InputSplit> splits = new ArrayList<InputSplit>(numSplits.intValue());
 
-        String tableName = conf.get("mapred.input.dir");
+        Job job = new Job(conf);
+        JobContext jobContext = new JobContext(job.getConfiguration(), job.getJobID());
+        Path[] tablePaths = FileInputFormat.getInputPaths(jobContext);
         for(int i = 0; i < numSplits; i++) {
             Long size = (numSplitRecords == 1) ? 1 : numSplitRecords-1;
-            splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(queryString, i*numSplitRecords, size, hostPort.split(":")[0],tableName+"/"+i),"ElasticSearchSplit"));
+            splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(i*numSplitRecords, size, hostPort.split(":")[0],tablePaths[0].toString()),"ElasticSearchSplit"));
         }
-        if (numHits % numSplits > 0) splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(queryString, numSplits*numSplitRecords, numHits % numSplits - 1,hostPort.split(":")[0],tableName+"/"+numSplits),"ElasticSearchSplit"));
+        if (numHits % numSplits > 0) splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(numSplits*numSplitRecords, numHits % numSplits - 1,hostPort.split(":")[0],tablePaths[0].toString()),"ElasticSearchSplit"));
         LOG.info("Created ["+splits.size()+"] splits for ["+numHits+"] hits");
         return splits.toArray(new InputSplit[splits.size()]);
     }
@@ -159,7 +174,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
         SearchResponse response = client.prepareSearch(indexName)
                 .setTypes(objType)
                 .setSearchType(SearchType.COUNT)
-                .setQuery(QueryBuilders.queryString(queryString))
+                .setQuery(queryBuilder)
                 .setSize(requestSize)
                 .execute()
                 .actionGet();
@@ -168,15 +183,46 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
         this.numSplitRecords = (numHits/numSplits);
     }
 
+    public static QueryBuilder getPushedDownPredicateQueryBuilder(JobConf jobConf) {
+    String filterExprSerialized =
+            jobConf.get(TableScanDesc.FILTER_EXPR_CONF_STR);
+    if (filterExprSerialized == null) {
+        return QueryBuilders.matchAllQuery();
+    }
+    ExprNodeDesc filterExpr =
+            Utilities.deserializeExpression(filterExprSerialized, jobConf);
+        IndexPredicateAnalyzer analyzer =
+                newIndexPredicateAnalyzer();
+
+        List<IndexSearchCondition> searchConditions =
+                new ArrayList<IndexSearchCondition>();
+        ExprNodeDesc residualPredicate =
+                analyzer.analyzePredicate(filterExpr, searchConditions);
+        BoolQueryBuilder bqb = boolQuery();
+
+        for ( IndexSearchCondition condition : searchConditions ) {
+//            String columnType = condition.getColumnDesc().getTypeInfo().getTypeName();
+//            if (columnType.equals(Constants.BIGINT_TYPE_NAME) ||
+//                columnType.equals(Constants.INT_TYPE_NAME) ||
+//                columnType.equals(Constants.FLOAT_TYPE_NAME) ||
+//                columnType.equals(Constants.DOUBLE_TYPE_NAME)) {
+//                bqb.must(termQuery(condition.getColumnDesc().getColumn(),(Number)condition.getConstantDesc().getValue()));
+//            } else if (columnType.equals(Constants.STRING_TYPE_NAME)) {
+//                bqb.must(termQuery(condition.getColumnDesc().getColumn(),(String)condition.getConstantDesc().getValue()));
+//            } else if (columnType.equals(Constants.BOOLEAN_TYPE_NAME)) {
+//                bqb.must(termQuery(condition.getColumnDesc().getColumn(),(Boolean)condition.getConstantDesc().getValue()));
+//            }
+            bqb.must(termQuery(condition.getColumnDesc().getColumn(),condition.getConstantDesc().getValue()));
+
+        }
+
+        return bqb;
+    }
 
     @Override
     public RecordReader getRecordReader(InputSplit inputSplit, JobConf conf, Reporter reporter) throws IOException {
-        Thread.dumpStack();
         ElasticSearchRecordReader reader = new ElasticSearchRecordReader();
         LOG.info("getRecordReader called with conf containing hostport " + conf.get(ES_HOSTPORT));
-        for (Map.Entry<String,String> entry : conf) {
-            LOG.info(entry);
-        }
         conf.reloadConfiguration();
         reader.initialize(inputSplit,conf);
         return reader;
@@ -195,7 +241,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
         private Iterator<SearchHit> hitsItr = null;
         private String hostPort;
 
-        private String queryString;
+        private QueryBuilder queryBuilder;
         private Long from;
         private Long recsToRead;
 
@@ -215,6 +261,8 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
                 LOG.info("Using ["+taskConfigPath+"] as es.config");
                 String taskPluginsPath = HadoopUtils.fetchArchiveFromCache(ES_PLUGINS_NAME, conf);
                 LOG.info("Using ["+taskPluginsPath+"] as es.plugins.dir");
+
+
                 System.setProperty(ES_CONFIG, taskConfigPath);
                 System.setProperty(ES_PLUGINS, taskPluginsPath+SLASH+ES_PLUGINS_NAME);
 
@@ -238,11 +286,11 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
             }
             HiveInputFormat.HiveInputSplit hiveSplit = (HiveInputFormat.HiveInputSplit)split;
             ElasticSearchSplit esSplit = (ElasticSearchSplit)(hiveSplit.getInputSplit());
-            queryString = esSplit.getQueryString();
+            queryBuilder = getPushedDownPredicateQueryBuilder(conf);
             from = esSplit.getFrom();
             recsToRead = esSplit.getSize();
             hostPort = conf.get(ES_HOSTPORT);
-            LOG.info("elasticsearch record reader: query ["+queryString+"], from ["+from+"], size ["+recsToRead+"]");
+            LOG.info("elasticsearch record reader: query ["+queryBuilder+"], from ["+from+"], size ["+recsToRead+"]");
             start_embedded_client();
             recordsRead = 0;
         }
@@ -275,7 +323,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
                     .setTypes(objType)
                     .setFrom(from.intValue())
                     .setSize(recsToRead.intValue())
-                    .setQuery(QueryBuilders.queryString(queryString))
+                    .setQuery(queryBuilder)
                     .execute()
                     .actionGet();
             return response.hits().iterator();
@@ -342,5 +390,23 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
             return 0;  //To change body of implemented methods use File | Settings | File Templates.
         }
 
+    }
+
+    /**
+     * Instantiates a new predicate analyzer suitable for
+     * determining how to push a filter down into the elasticsearch query,
+     * based on the rules for what kinds of pushdown we currently support.
+     *
+     * @return preconfigured predicate analyzer
+     */
+    static IndexPredicateAnalyzer newIndexPredicateAnalyzer() {
+
+        IndexPredicateAnalyzer analyzer = new IndexPredicateAnalyzer();
+
+        // for now, we only support equality comparisons
+        analyzer.addComparisonOp(
+                "org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPEqual");
+
+        return analyzer;
     }
 }
