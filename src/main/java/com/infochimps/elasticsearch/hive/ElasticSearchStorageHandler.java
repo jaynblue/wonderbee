@@ -10,20 +10,34 @@ import org.apache.hadoop.hive.metastore.HiveMetaHook;
 import org.apache.hadoop.hive.metastore.api.MetaException;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.ql.exec.Utilities;
+import org.apache.hadoop.hive.ql.index.IndexPredicateAnalyzer;
+import org.apache.hadoop.hive.ql.index.IndexSearchCondition;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
+import org.apache.hadoop.hive.ql.metadata.HiveStoragePredicateHandler;
+import org.apache.hadoop.hive.ql.plan.ExprNodeDesc;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.serde2.Deserializer;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.mapred.InputFormat;
+import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputFormat;
 import org.apache.log4j.Logger;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.TermQuery;
+import org.elasticsearch.index.query.BoolQueryBuilder;
+import org.elasticsearch.index.query.FilteredQueryBuilder;
+import org.elasticsearch.index.query.QueryBuilders;
 
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Properties;
+import java.util.*;
 
+import static org.elasticsearch.index.query.FilterBuilders.*;
+import static org.elasticsearch.index.query.QueryBuilders.*;
 /**
  * Copyright (c) 2012 klout.com
  *
@@ -39,7 +53,7 @@ import java.util.Properties;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-public class ElasticSearchStorageHandler implements HiveStorageHandler {
+public class ElasticSearchStorageHandler implements HiveStorageHandler, HiveStoragePredicateHandler {
 
     public static final String ES_INDEX_NAME = "elasticsearch.index.name";
     public static final String ES_BULK_SIZE = "elasticsearch.bulk.size";
@@ -93,7 +107,6 @@ public class ElasticSearchStorageHandler implements HiveStorageHandler {
     public void configureTableJobProperties(TableDesc tableDesc, Map<String, String> jobProperties) {
         LOG.info("called configureTableJobProperties");
         Properties props = tableDesc.getProperties();
-
         try {
             // Parse the passed in location URI, pulling out the arguments as well
             String location = props.getProperty(ES_LOCATION);
@@ -227,5 +240,19 @@ public class ElasticSearchStorageHandler implements HiveStorageHandler {
             }
         }
         return argMap;
+    }
+
+    @Override
+    public DecomposedPredicate decomposePredicate(JobConf entries, Deserializer deserializer, ExprNodeDesc exprNodeDesc) {
+        IndexPredicateAnalyzer analyzer =
+                ElasticSearchHiveInputFormat.newIndexPredicateAnalyzer();
+        List<IndexSearchCondition> searchConditions =
+                new ArrayList<IndexSearchCondition>();
+        ExprNodeDesc residualPredicate = analyzer.analyzePredicate(exprNodeDesc, searchConditions);
+        DecomposedPredicate decomposedPredicate = new DecomposedPredicate();
+        decomposedPredicate.pushedPredicate = analyzer.translateSearchConditions(
+                searchConditions);
+        decomposedPredicate.residualPredicate = residualPredicate;
+        return decomposedPredicate;
     }
 }

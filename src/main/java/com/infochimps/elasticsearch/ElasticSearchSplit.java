@@ -13,7 +13,6 @@ import org.apache.hadoop.mapred.InputSplit;
 
 public class ElasticSearchSplit extends FileSplit implements InputSplit, Writable {
 
-    private String queryString;
     private long from;
     private long size;
     private String host;
@@ -23,17 +22,12 @@ public class ElasticSearchSplit extends FileSplit implements InputSplit, Writabl
         super( new Path("dummy"), 0, 0, new String[] {});
     }
 
-    public ElasticSearchSplit(String queryString, long from, long size, String host, String tableLocation) {
+    public ElasticSearchSplit(long from, long size, String host, String tableLocation) {
         super( new Path("dummy"), 0, 0, new String[] {});
-        this.queryString = queryString;
         this.from = from;
         this.size = size;
         this.host = host;
         this.tableLocation = tableLocation;
-    }
-
-    public String getQueryString() {
-        return queryString;
     }
 
     public long getFrom() {
@@ -63,7 +57,6 @@ public class ElasticSearchSplit extends FileSplit implements InputSplit, Writabl
     @Override
     public void readFields(DataInput in) throws IOException {
         //super.readFields(in);
-        queryString = Text.readString(in);
         from = in.readLong();
         size = in.readLong();
         host = Text.readString(in);
@@ -75,7 +68,6 @@ public class ElasticSearchSplit extends FileSplit implements InputSplit, Writabl
     @Override
     public void write(DataOutput out) throws IOException {
         //super.write(out);
-        Text.writeString(out, queryString);
         out.writeLong(from);
         out.writeLong(size);
         Text.writeString(out,host);
