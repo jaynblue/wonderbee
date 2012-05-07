@@ -2,12 +2,12 @@
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>com.infochimps.elasticsearch</groupId>
-  <artifactId>wonderdog</artifactId>
+  <groupId>org.wonderbee</groupId>
+  <artifactId>wonderbee</artifactId>
   <version>1.0</version>
   <packaging>jar</packaging>
 
-  <name>wonderdog</name>
+  <name>wonderbee</name>
   <url>http://maven.apache.org</url>
 
   <properties>
