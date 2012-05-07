@@ -1,16 +1,12 @@
-package com.infochimps.elasticsearch;
+package org.wonderbee.elasticsearch;
 
-import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
+import org.wonderbee.hadoop.util.HadoopUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.*;
-import org.apache.hadoop.util.Progressable;
 import org.elasticsearch.ElasticSearchException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.bulk.BulkRequestBuilder;
@@ -30,7 +26,6 @@ import org.elasticsearch.node.NodeBuilder;
 
 import java.io.IOException;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
 

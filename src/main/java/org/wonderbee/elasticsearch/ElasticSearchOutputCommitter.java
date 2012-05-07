@@ -1,4 +1,4 @@
-package com.infochimps.elasticsearch;
+package org.wonderbee.elasticsearch;
 
 import java.io.IOException;
 

@@ -1,8 +1,6 @@
-package com.infochimps.elasticsearch.hive;
+package org.wonderbee.elasticsearch.hive;
 
-import com.infochimps.elasticsearch.ElasticSearchOutputFormat;
-import org.apache.hadoop.conf.Configurable;
-import org.apache.hadoop.conf.Configuration;
+import org.wonderbee.elasticsearch.ElasticSearchOutputFormat;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
@@ -16,7 +14,6 @@ import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputFormat;
 import org.apache.hadoop.util.Progressable;
 import org.apache.log4j.Logger;
-import org.apache.pig.builtin.LOG;
 
 import java.io.IOException;
 import java.util.Properties;
@@ -36,6 +33,10 @@ import java.util.Properties;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * A wrapper for Wonderdog's new style hadoop api ElasticSearchOutputFormat to work with Hive.
+ */
 public class ElasticSearchHiveOutputFormat implements HiveOutputFormat<WritableComparable, Writable>, OutputFormat {
     private  ElasticSearchOutputFormat enclosedOutputFormat = new ElasticSearchOutputFormat();
     private static Logger LOG = Logger.getLogger(ElasticSearchHiveOutputFormat.class);
@@ -50,7 +51,7 @@ public class ElasticSearchHiveOutputFormat implements HiveOutputFormat<WritableC
         } catch (InterruptedException e) {
             throw new IOException(e);
         }
-        //final FileSystem fs = path.getFileSystem(jobConf);
+
         return new FileSinkOperator.RecordWriter(){
             public void write(Writable obj) throws IOException {
                 esWriter.write(NullWritable.get(),(MapWritable) obj);
@@ -64,7 +65,7 @@ public class ElasticSearchHiveOutputFormat implements HiveOutputFormat<WritableC
 
     @Override
     public void checkOutputSpecs(FileSystem fileSystem, JobConf entries) throws IOException {
-        //To change body of implemented methods use File | Settings | File Templates.
+
     }
 
     @Override

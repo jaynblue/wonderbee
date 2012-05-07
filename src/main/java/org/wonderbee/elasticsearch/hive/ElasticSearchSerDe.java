@@ -1,10 +1,6 @@
-package com.infochimps.elasticsearch.hive;
+package org.wonderbee.elasticsearch.hive;
 
-import com.infochimps.elasticsearch.ElasticSearchOutputFormat;
-import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.filecache.DistributedCache;
-import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.serde.Constants;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
@@ -15,22 +11,28 @@ import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils;
 import org.apache.hadoop.io.*;
 import org.apache.log4j.Logger;
-
-import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.*;
-
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
 
+import java.util.*;
+
 /**
- * Created with IntelliJ IDEA.
- * User: tristan
- * Date: 4/6/12
- * Time: 3:44 PM
- * To change this template use File | Settings | File Templates.
+ * Copyright (c) 2012 klout.com
+ *
+ * Based on work Copyright (c) Infochimps
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 public class ElasticSearchSerDe implements SerDe {
 
@@ -49,7 +51,6 @@ public class ElasticSearchSerDe implements SerDe {
 
     @Override
     public void initialize(Configuration conf, Properties properties) throws SerDeException {
-        LOG.info("SerDe: "+properties);
         props = properties;
         String columnNameProperty = props.getProperty(Constants.LIST_COLUMNS);
         String columnTypeProperty = props.getProperty(Constants.LIST_COLUMN_TYPES);
@@ -68,8 +69,6 @@ public class ElasticSearchSerDe implements SerDe {
             }
         }
         rowOI = ObjectInspectorFactory.getStandardStructObjectInspector(columnNames, columnOIs);
-
-
     }
 
     @Override
@@ -110,6 +109,12 @@ public class ElasticSearchSerDe implements SerDe {
         return record;
     }
 
+    /**
+     *
+     * @param writable Serialized JSON in a Text Writable
+     * @return Returns a List of objects corresponding to a Hive row
+     * @throws SerDeException
+     */
     @Override
     public Object deserialize(Writable writable) throws SerDeException {
         String jsonText = ((Text) writable).toString();
@@ -120,7 +125,6 @@ public class ElasticSearchSerDe implements SerDe {
             throw new SerDeException(e);        }
         List<Object> result = new ArrayList<Object>();
         for (int i = 0; i < numColumns; i++) {
-            // LOG.error("Processing column: " + i + " name: " + columnNames.get(i));
             String columnName = columnNames.get(i);
             Object jsonValue = jsonObj.get(columnName);
             Object value = null;
@@ -138,6 +142,8 @@ public class ElasticSearchSerDe implements SerDe {
                     value = jsonValue;
                 } else if (type.getTypeName().equals(Constants.DOUBLE_TYPE_NAME)) {
                     value = ((Number)jsonValue).doubleValue();
+                } else {
+                    throw new SerDeException("Unsupported Type!");
                 }
             }
 
