@@ -1,15 +1,10 @@
-package com.infochimps.elasticsearch.hive;
+package org.wonderbee.elasticsearch.hive;
 
-import com.infochimps.elasticsearch.ElasticSearchOutputFormat;
-import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
+import org.wonderbee.elasticsearch.ElasticSearchOutputFormat;
+import org.wonderbee.hadoop.util.HadoopUtils;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.filecache.DistributedCache;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.metastore.HiveMetaHook;
-import org.apache.hadoop.hive.metastore.api.MetaException;
-import org.apache.hadoop.hive.metastore.api.Table;
-import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.index.IndexPredicateAnalyzer;
 import org.apache.hadoop.hive.ql.index.IndexSearchCondition;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
@@ -22,22 +17,11 @@ import org.apache.hadoop.mapred.InputFormat;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputFormat;
 import org.apache.log4j.Logger;
-import org.apache.lucene.index.Term;
-import org.apache.lucene.search.BooleanClause;
-import org.apache.lucene.search.BooleanQuery;
-import org.apache.lucene.search.Query;
-import org.apache.lucene.search.TermQuery;
-import org.elasticsearch.index.query.BoolQueryBuilder;
-import org.elasticsearch.index.query.FilteredQueryBuilder;
-import org.elasticsearch.index.query.QueryBuilders;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.*;
 
-import static org.elasticsearch.index.query.FilterBuilders.*;
-import static org.elasticsearch.index.query.QueryBuilders.*;
 /**
  * Copyright (c) 2012 klout.com
  *
@@ -60,7 +44,6 @@ public class ElasticSearchStorageHandler implements HiveStorageHandler, HiveStor
     public static final String ES_ID_FIELD_NAME = "elasticsearch.id.field.name";
     public static final String ES_OBJECT_TYPE = "elasticsearch.object.type";
     public static final String ES_IS_JSON = "elasticsearch.is_json";
-    public static final String PIG_ES_FIELD_NAMES = "elasticsearch.pig.field.names";
     public static final String ES_REQUEST_SIZE = "elasticsearch.request.size";
     public static final String ES_NUM_SPLITS = "elasticsearch.num.input.splits";
     public static final String ES_QUERY_STRING = "elasticsearch.query.string";
@@ -177,6 +160,7 @@ public class ElasticSearchStorageHandler implements HiveStorageHandler, HiveStor
                 // Need to set this to start the local instance of elasticsearch
                 LOG.info("storage handler set \"es.config\" to " + esConfig);
                 jobProperties.put(ES_CONFIG, esConfig);
+                conf.set(ES_CONFIG, esConfig);
                 LOG.info("storage handler set \"es.path.plugins\" to " + esPlugins);
                 jobProperties.put(ES_PLUGINS, esPlugins);
                 LOG.info("storage handler set \"es.hostport\" to " + esHostPort);

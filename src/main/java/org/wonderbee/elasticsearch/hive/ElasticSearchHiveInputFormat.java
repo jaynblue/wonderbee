@@ -1,10 +1,9 @@
-package com.infochimps.elasticsearch.hive;
+package org.wonderbee.elasticsearch.hive;
 
-import com.infochimps.elasticsearch.ElasticSearchSplit;
-import com.infochimps.elasticsearch.hadoop.util.HadoopUtils;
+import org.wonderbee.elasticsearch.ElasticSearchSplit;
+import org.wonderbee.hadoop.util.HadoopUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.Utilities;
@@ -13,46 +12,39 @@ import org.apache.hadoop.hive.ql.index.IndexSearchCondition;
 import org.apache.hadoop.hive.ql.io.HiveInputFormat;
 import org.apache.hadoop.hive.ql.plan.ExprNodeDesc;
 import org.apache.hadoop.hive.ql.plan.TableScanDesc;
-import org.apache.hadoop.hive.serde.Constants;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.*;
-import org.apache.hadoop.mapred.InputSplit;
-import org.apache.hadoop.mapred.RecordReader;
-import org.apache.hadoop.mapred.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.Job;
-import org.apache.hadoop.mapreduce.lib.input.*;
+import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
-import org.elasticsearch.action.admin.indices.segments.IndexSegments;
-import org.elasticsearch.action.admin.indices.segments.IndexShardSegments;
-import org.elasticsearch.action.admin.indices.segments.IndicesSegmentsRequest;
-import org.elasticsearch.action.admin.indices.segments.ShardSegments;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.transport.TransportClient;
+import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.cluster.routing.IndexRoutingTable;
+import org.elasticsearch.cluster.routing.IndexShardRoutingTable;
+import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
-import org.elasticsearch.index.engine.Segment;
+import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.index.query.BoolQueryBuilder;
+import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.node.NodeBuilder;
 import org.elasticsearch.search.SearchHit;
-import org.apache.hadoop.mapreduce.JobContext;
-import java.io.DataInput;
-import java.io.DataOutput;
+
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
-import org.elasticsearch.index.query.QueryBuilder;
-import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
-import static org.elasticsearch.index.query.QueryBuilders.termQuery;
 
+import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
+import static org.elasticsearch.index.query.QueryBuilders.rangeQuery;
 /**
  * Copyright (c) 2012 klout.com
  *
- * Based on work Copyright (c) Infochimps
+ * Based in part on work Copyright (c) Infochimps
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -74,16 +66,13 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
     private Client client;
 
     private Integer requestSize;
-    private Long numHits;
-    private Long numSplits;
-    private Long numSplitRecords;
     private String indexName;
-    private String objType;
-    private QueryBuilder queryBuilder;
+
     private String hostPort;
 
+
+
     private static final String ES_REQUEST_SIZE = "elasticsearch.request.size";           // number of records to fetch at one time
-    private static final String ES_NUM_SPLITS = "elasticsearch.num.input.splits";       // number of hadoop map tasks to launch
     private static final String ES_QUERY_STRING = "elasticsearch.query.string";
 
     private static final String ES_CONFIG_NAME = "elasticsearch.yml";
@@ -98,56 +87,53 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
     /**
      The number of splits is specified in the Hadoop configuration object.
      */
-    public InputSplit[] getSplits(JobConf conf, int j) throws IOException {
+    public InputSplit[] getSplits(JobConf conf, int numSplitsHint) throws IOException {
         this.conf = conf;
         this.indexName = conf.get(ES_INDEX_NAME);
-        this.objType = conf.get(ES_OBJECT_TYPE);
-        this.requestSize = Integer.parseInt(conf.get(ES_REQUEST_SIZE, "100"));
-        this.numSplits = Long.parseLong(conf.get(ES_NUM_SPLITS, "10"));
-        this.queryBuilder = getPushedDownPredicateQueryBuilder(conf);
+        this.requestSize = Integer.parseInt(conf.get(ES_REQUEST_SIZE, "1000"));
 
         this.hostPort = conf.get(ElasticSearchStorageHandler.ES_HOSTPORT);
-        LOG.info("getSplits called with hostPort " + hostPort);
-        //
-        // Need to ensure that this is set in the hadoop configuration so we can
-        // instantiate a local client. The reason is that no files are in the
-        // distributed cache when this is called.
-        //
 
 
         System.setProperty(ES_CONFIG, conf.get(ES_CONFIG));
         System.setProperty(ES_PLUGINS, conf.get(ES_PLUGINS));
 
         start_embedded_client();
-
-        initiate_search();
-
-        try {
-            IndexSegments segments = this.client.admin().indices().segments(new IndicesSegmentsRequest()).get().getIndices().get(this.indexName);
-            for (IndexShardSegments segment : segments) {
-                LOG.info(segment.getShardId().getId());
-                for (ShardSegments seg : segment.getShards()) {
-                    LOG.info(seg.getShardRouting().currentNodeId());
+        LOG.info("Admin client started");
+        //Get the mapping of shards to node/hosts with primary
+        ClusterState clusterState = client.admin().cluster().prepareState().execute().actionGet().state();
+        Map<Integer,String[]> shardToHost = new LinkedHashMap<Integer,String[]>();
+        for (IndexRoutingTable indexRoutingTable : clusterState.routingTable()) {
+            for (IndexShardRoutingTable indexShardRoutingTable : indexRoutingTable) {
+                for (ShardRouting shardRouting : indexShardRoutingTable.getAssignedShards()) {
+                    if (shardRouting.shardId().index().getName().equals(this.indexName) && shardRouting.primary()) {
+                        InetSocketTransportAddress address = (InetSocketTransportAddress) clusterState.nodes().get(shardRouting.currentNodeId()).getAddress();
+                        int shardId = shardRouting.shardId().getId();
+                        String hostPort = address.address().getHostName()+":"+address.address().getPort();
+                        String nodeName = shardRouting.currentNodeId();
+                        shardToHost.put(shardId,new String[]{hostPort,nodeName});
+                    }
                 }
             }
-
-        } catch (InterruptedException e) {
-            e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
-        } catch (ExecutionException e) {
-            e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
         }
-
-        List<InputSplit> splits = new ArrayList<InputSplit>(numSplits.intValue());
+        this.client.close();
+        LOG.info("Admin client closed");
+        List<InputSplit> splits = new ArrayList<InputSplit>(shardToHost.size());
 
         Job job = new Job(conf);
         JobContext jobContext = new JobContext(job.getConfiguration(), job.getJobID());
         Path[] tablePaths = FileInputFormat.getInputPaths(jobContext);
-        for(int i = 0; i < numSplits; i++) {
-            Long size = (numSplitRecords == 1) ? 1 : numSplitRecords-1;
-            splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(i*numSplitRecords, size, hostPort.split(":")[0],tablePaths[0].toString()),"ElasticSearchSplit"));
+
+        //Consultation with kimchy revealed it should be more efficient to just have as many splits
+        //as shards.
+        for (Map.Entry<Integer, String[]> pair : shardToHost.entrySet()) {
+            int shard = pair.getKey();
+            String shardHostPort = pair.getValue()[0];
+            String nodeName = pair.getValue()[1];
+            LOG.debug("Created split: shard:" + shard + ", host:" + shardHostPort + ", node:" + nodeName);
+
+            splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(0, this.requestSize, shardHostPort, nodeName, shard, tablePaths[0].toString()), "ElasticSearchSplit"));
         }
-        if (numHits % numSplits > 0) splits.add(new HiveInputFormat.HiveInputSplit(new ElasticSearchSplit(numSplits*numSplitRecords, numHits % numSplits - 1,hostPort.split(":")[0],tablePaths[0].toString()),"ElasticSearchSplit"));
-        LOG.info("Created ["+splits.size()+"] splits for ["+numHits+"] hits");
         return splits.toArray(new InputSplit[splits.size()]);
     }
 
@@ -155,7 +141,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
      Starts an embedded elasticsearch client (ie. data = false)
      */
     private void start_embedded_client() {
-
+        if (this.hostPort != null) {
             LOG.info("Starting transport elasticsearch client ...");
             Settings settings = ImmutableSettings.settingsBuilder()
                     .put("client.transport.sniff", true).build();
@@ -166,22 +152,14 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
             this.client = new TransportClient()
                     .addTransportAddress(new InetSocketTransportAddress(host, port));
             LOG.info("Transport client started");
-
-
+        } else {
+            LOG.info("Starting embedded elasticsearch client ...");
+            this.node   = NodeBuilder.nodeBuilder().client(true).node();
+            this.client = node.client();
+            LOG.info("Embedded elasticsearch client started");
+        }
     }
 
-    private void initiate_search() {
-        SearchResponse response = client.prepareSearch(indexName)
-                .setTypes(objType)
-                .setSearchType(SearchType.COUNT)
-                .setQuery(queryBuilder)
-                .setSize(requestSize)
-                .execute()
-                .actionGet();
-        this.numHits = response.hits().totalHits();
-        if(numSplits > numHits) numSplits = numHits; // This could be bad
-        this.numSplitRecords = (numHits/numSplits);
-    }
 
     public static QueryBuilder getPushedDownPredicateQueryBuilder(JobConf jobConf) {
     String filterExprSerialized =
@@ -201,21 +179,16 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
         BoolQueryBuilder bqb = boolQuery();
 
         for ( IndexSearchCondition condition : searchConditions ) {
-//            String columnType = condition.getColumnDesc().getTypeInfo().getTypeName();
-//            if (columnType.equals(Constants.BIGINT_TYPE_NAME) ||
-//                columnType.equals(Constants.INT_TYPE_NAME) ||
-//                columnType.equals(Constants.FLOAT_TYPE_NAME) ||
-//                columnType.equals(Constants.DOUBLE_TYPE_NAME)) {
-//                bqb.must(termQuery(condition.getColumnDesc().getColumn(),(Number)condition.getConstantDesc().getValue()));
-//            } else if (columnType.equals(Constants.STRING_TYPE_NAME)) {
-//                bqb.must(termQuery(condition.getColumnDesc().getColumn(),(String)condition.getConstantDesc().getValue()));
-//            } else if (columnType.equals(Constants.BOOLEAN_TYPE_NAME)) {
-//                bqb.must(termQuery(condition.getColumnDesc().getColumn(),(Boolean)condition.getConstantDesc().getValue()));
-//            }
-            bqb.must(termQuery(condition.getColumnDesc().getColumn(),condition.getConstantDesc().getValue()));
-
+            if (condition.getComparisonOp().equals("org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPEqualOrGreaterThan")) {
+                bqb.must(rangeQuery(condition.getColumnDesc().getColumn()).gte(condition.getConstantDesc().getValue()));
+            } else if (condition.getComparisonOp().equals("org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPGreaterThan")) {
+                bqb.must(rangeQuery(condition.getColumnDesc().getColumn()).gt(condition.getConstantDesc().getValue()));
+            } else if (condition.getComparisonOp().equals("org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPEqualOrLessThan")) {
+                bqb.must(rangeQuery(condition.getColumnDesc().getColumn()).lte(condition.getConstantDesc().getValue()));
+            } else if (condition.getComparisonOp().equals("org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPLessThan")) {
+                bqb.must(rangeQuery(condition.getColumnDesc().getColumn()).lt(condition.getConstantDesc().getValue()));
+            }
         }
-
         return bqb;
     }
 
@@ -235,15 +208,14 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
 
         private String indexName;
         private String objType;
-        private Long numSplitRecords;
-        private Integer requestSize;
-        private Integer recordsRead;
         private Iterator<SearchHit> hitsItr = null;
         private String hostPort;
-
+        private String nodeName;
+        private int shard;
         private QueryBuilder queryBuilder;
-        private Long from;
         private Long recsToRead;
+
+        private SearchResponse scrollResp;
 
         public ElasticSearchRecordReader() {}
 
@@ -262,37 +234,28 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
                 String taskPluginsPath = HadoopUtils.fetchArchiveFromCache(ES_PLUGINS_NAME, conf);
                 LOG.info("Using ["+taskPluginsPath+"] as es.plugins.dir");
 
+                if (taskConfigPath == null || taskPluginsPath == null ) {
+                    //Local
+                    System.setProperty(ES_CONFIG, conf.get(ES_CONFIG));
+                    System.setProperty(ES_PLUGINS, conf.get(ES_PLUGINS));
+                } else {
+                    //Distributed
+                    System.setProperty(ES_CONFIG, taskConfigPath);
+                    System.setProperty(ES_PLUGINS, taskPluginsPath+SLASH+ES_PLUGINS_NAME);
+                }
 
-                System.setProperty(ES_CONFIG, taskConfigPath);
-                System.setProperty(ES_PLUGINS, taskPluginsPath+SLASH+ES_PLUGINS_NAME);
-
-
-
-//                String taskConfigPath = null;
-//                String taskPluginsPath = null;
-//                try {
-//                    taskConfigPath = HadoopUtils.fetchFileFromCache(ES_CONFIG_NAME, conf);
-//                    taskPluginsPath = HadoopUtils.fetchArchiveFromCache(ES_PLUGINS_NAME, conf);
-//                } catch (IOException e) {
-//                    e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
-//                }
-//                LOG.info("input format got "+taskConfigPath+" for config and "+taskPluginsPath+" for plugins");
-//
-//
-//                System.setProperty(ES_CONFIG,  taskConfigPath);
-//                System.setProperty(ES_PLUGINS, taskPluginsPath);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
             HiveInputFormat.HiveInputSplit hiveSplit = (HiveInputFormat.HiveInputSplit)split;
             ElasticSearchSplit esSplit = (ElasticSearchSplit)(hiveSplit.getInputSplit());
             queryBuilder = getPushedDownPredicateQueryBuilder(conf);
-            from = esSplit.getFrom();
             recsToRead = esSplit.getSize();
-            hostPort = conf.get(ES_HOSTPORT);
-            LOG.info("elasticsearch record reader: query ["+queryBuilder+"], from ["+from+"], size ["+recsToRead+"]");
+            hostPort = esSplit.getHost();
+            nodeName = esSplit.getNodeName();
+            shard = esSplit.getShard();
+            LOG.info("elasticsearch record reader: query ["+queryBuilder.toString()+"]");
             start_embedded_client();
-            recordsRead = 0;
         }
 
         /**
@@ -319,45 +282,54 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
         }
 
         private Iterator<SearchHit> fetchNextHits() {
-            SearchResponse response = client.prepareSearch(indexName)
+            LOG.info(String.format("_shards:%s;_prefer_node:%s",shard,nodeName));
+            if (this.scrollResp == null) {
+                LOG.info("intial scan request");
+                this.scrollResp = client.prepareSearch(indexName)
                     .setTypes(objType)
-                    .setFrom(from.intValue())
-                    .setSize(recsToRead.intValue())
+                    .setSearchType(SearchType.SCAN)
+                    .setScroll(new TimeValue(600000))
                     .setQuery(queryBuilder)
-                    .execute()
-                    .actionGet();
-            return response.hits().iterator();
+                    .setPreference(String.format("_shards:%s;_prefer_node:%s",shard,nodeName))
+                    .setSize(recsToRead.intValue()).execute().actionGet();
+                //SCAN mode only returns hits on the second call
+                LOG.info("Number of hits on this shard: "+this.scrollResp.getHits().totalHits());
+                if (this.scrollResp.getHits().totalHits() > 0) {
+                    this.scrollResp = client.prepareSearchScroll(scrollResp.getScrollId()).setScroll(new TimeValue(600000)).execute().actionGet();
+                }
+            } else {
+                this.scrollResp = client.prepareSearchScroll(scrollResp.getScrollId()).setScroll(new TimeValue(600000)).execute().actionGet();
+
+            }
+            Iterator<SearchHit> resultHits = scrollResp.hits().iterator();
+            LOG.info(resultHits.hasNext());
+            return resultHits;
+
+
         }
 
         @Override
         public boolean next(Text key, Text value) throws IOException {
-            if (hitsItr!=null) {
-                //This should obviously be refactored
-                if (recordsRead < recsToRead) {
-                    if (hitsItr.hasNext()) {
-                        SearchHit hit = hitsItr.next();
-                        key.set(hit.id());
-                        value.set(hit.sourceAsString());
-                        recordsRead += 1;
-                        return true;
-                    }
-                } else {
-                    hitsItr = null;
-                }
-            } else {
-                if (recordsRead < recsToRead) {
+            int nohits = 0;
+            //first nohits because iterator ran out of hits
+            //second because the next iterator was empty
+            while (nohits < 2) {
+                if (hitsItr == null) {
                     hitsItr = fetchNextHits();
-                    if (hitsItr.hasNext()) {
-                        SearchHit hit = hitsItr.next();
-                        key.set(hit.id());
-                        value.set(hit.sourceAsString());
-                        recordsRead += 1;
-                        return true;
-                    }
+                }
+                if (hitsItr.hasNext()) {
+                    SearchHit hit = hitsItr.next();
+                    key.set(hit.id());
+                    value.set(hit.sourceAsString());
+                    return true;
+                } else {
+                    nohits += 1;
                 }
             }
             return false;
         }
+
+
 
         @Override
         public Text createKey() {
@@ -403,9 +375,18 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
 
         IndexPredicateAnalyzer analyzer = new IndexPredicateAnalyzer();
 
-        // for now, we only support equality comparisons
+        // for now, we only support greater than and less than since equality
+        // is only true for non analyzed fields
+        //analyzer.addComparisonOp(
+        //        "org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPEqual");
         analyzer.addComparisonOp(
-                "org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPEqual");
+                "org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPGreaterThan");
+        analyzer.addComparisonOp(
+                "org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPEqualOrGreaterThan");
+        analyzer.addComparisonOp(
+                "org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPLessThan");
+        analyzer.addComparisonOp(
+                "org.apache.hadoop.hive.ql.udf.generic.GenericUDFOPEqualOrLessThan");
 
         return analyzer;
     }

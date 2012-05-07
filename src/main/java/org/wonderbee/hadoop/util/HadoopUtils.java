@@ -1,19 +1,29 @@
-package com.infochimps.elasticsearch.hadoop.util;
+package org.wonderbee.hadoop.util;
 
-import java.io.File;
-
-import java.io.IOException;
-import java.io.FileNotFoundException;
-import java.util.Arrays;
-
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.filecache.DistributedCache;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.log4j.Logger;
-import org.elasticsearch.common.collect.Lists;
 
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+/**
+ * Copyright (c) Infochimps
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 public class HadoopUtils {
     private static final Logger LOG = Logger.getLogger(HadoopUtils.class);
     /**
@@ -50,14 +60,6 @@ public class HadoopUtils {
      */
     public static String fetchFileFromCache(String basename, Configuration conf) throws IOException {
         Path[] cacheFiles = DistributedCache.getLocalCacheFiles(conf);
-        if (cacheFiles != null) {
-            for (Path p : cacheFiles) {
-                LOG.info(p);
-            }
-        }  else {
-            LOG.info("no local cache files");
-        }
-
         if (cacheFiles != null && cacheFiles.length > 0) {
             for (Path cacheFile : cacheFiles) {
                 if (cacheFile.getName().equals(basename)) {
@@ -73,13 +75,6 @@ public class HadoopUtils {
      */
     public static String fetchArchiveFromCache(String basename, Configuration conf) throws IOException {
         Path[] cacheArchives = DistributedCache.getLocalCacheArchives(conf);
-        if (cacheArchives != null) {
-            for (Path p : cacheArchives) {
-                LOG.info(p);
-            }
-        }  else {
-            LOG.info("no local cache files");
-        }
         if (cacheArchives != null && cacheArchives.length > 0) {
             for (Path cacheArchive : cacheArchives) {
                 if (cacheArchive.getName().equals(basename)) {
