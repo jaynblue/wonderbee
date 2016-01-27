@@ -1,5 +1,7 @@
 package org.wonderbee.elasticsearch.hive;
 
+import org.apache.hadoop.hive.ql.metadata.HiveException;
+import org.apache.hadoop.hive.ql.security.authorization.HiveAuthorizationProvider;
 import org.wonderbee.elasticsearch.ElasticSearchOutputFormat;
 import org.wonderbee.hadoop.util.HadoopUtils;
 import org.apache.hadoop.conf.Configuration;
@@ -84,6 +86,21 @@ public class ElasticSearchStorageHandler implements HiveStorageHandler, HiveStor
     public HiveMetaHook getMetaHook() {
         LOG.info("called getMetaHook");
         return null;
+    }
+
+    @Override
+    public HiveAuthorizationProvider getAuthorizationProvider() throws HiveException {
+        return null;
+    }
+
+    @Override
+    public void configureInputJobProperties(TableDesc tableDesc, Map<String, String> map) {
+
+    }
+
+    @Override
+    public void configureOutputJobProperties(TableDesc tableDesc, Map<String, String> map) {
+
     }
 
     @Override

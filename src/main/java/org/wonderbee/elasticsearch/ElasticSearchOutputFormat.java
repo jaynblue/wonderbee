@@ -1,13 +1,12 @@
 package org.wonderbee.elasticsearch;
 
-import org.wonderbee.hadoop.util.HadoopUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.*;
-import org.elasticsearch.ElasticSearchException;
+import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.bulk.BulkRequestBuilder;
 import org.elasticsearch.action.bulk.BulkResponse;
@@ -15,7 +14,6 @@ import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.Requests;
 import org.elasticsearch.client.transport.TransportClient;
-import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
 import org.elasticsearch.common.xcontent.XContentBuilder;
@@ -23,8 +21,10 @@ import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.indices.IndexAlreadyExistsException;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.node.NodeBuilder;
+import org.wonderbee.hadoop.util.HadoopUtils;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
@@ -234,7 +234,6 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
                         IndexRequest request = Requests.indexRequest(indexName).id(record_id).type(objType).create(false).source(builder);
                         // request.opType(IndexRequest.OpType.CREATE);
 						request.consistencyLevel(org.elasticsearch.action.WriteConsistencyLevel.QUORUM);
-						request.replicationType("sync");
                         currentRequest.add(request);
                     }
                 } catch (Exception e) {
@@ -304,7 +303,7 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
         private void executeBulkWrite() {
             BulkResponse response = currentRequest.execute().actionGet();
             if(response.hasFailures()) {
-                throw new ElasticSearchException(response.buildFailureMessage());
+                throw new ElasticsearchException(response.buildFailureMessage());
             }
         }
 
@@ -328,14 +327,15 @@ public class ElasticSearchOutputFormat extends OutputFormat<NullWritable, MapWri
 
             if (this.hostPort != null) {
                 LOG.info("Starting transport elasticsearch client ...");
-                Settings settings = ImmutableSettings.settingsBuilder()
+                Settings settings = Settings.builder()
                         .put("client.transport.sniff", true).build();
                 String[] split = this.hostPort.split(":");
                 String host = split[0];
                 int port = Integer.decode(split[1]);
 
-                this.client = new TransportClient()
-                        .addTransportAddress(new InetSocketTransportAddress(host, port));
+                this.client = TransportClient.builder().settings(settings).build()
+
+                .addTransportAddress(new InetSocketTransportAddress(new InetSocketAddress(host, port)));
                 LOG.info("Transport client started");
             } else {
                 LOG.info("Starting embedded elasticsearch client ...");

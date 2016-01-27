@@ -25,7 +25,6 @@ import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.routing.IndexRoutingTable;
 import org.elasticsearch.cluster.routing.IndexShardRoutingTable;
 import org.elasticsearch.cluster.routing.ShardRouting;
-import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
 import org.elasticsearch.common.unit.TimeValue;
@@ -37,6 +36,7 @@ import org.elasticsearch.node.NodeBuilder;
 import org.elasticsearch.search.SearchHit;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.util.*;
 
 import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
@@ -101,7 +101,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
         start_embedded_client();
         LOG.info("Admin client started");
         //Get the mapping of shards to node/hosts with primary
-        ClusterState clusterState = client.admin().cluster().prepareState().execute().actionGet().state();
+        ClusterState clusterState = client.admin().cluster().prepareState().execute().actionGet().getState();
         Map<Integer,String[]> shardToHost = new LinkedHashMap<Integer,String[]>();
         for (IndexRoutingTable indexRoutingTable : clusterState.routingTable()) {
             for (IndexShardRoutingTable indexShardRoutingTable : indexRoutingTable) {
@@ -121,7 +121,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
         List<InputSplit> splits = new ArrayList<InputSplit>(shardToHost.size());
 
         Job job = new Job(conf);
-        JobContext jobContext = new JobContext(job.getConfiguration(), job.getJobID());
+        JobContext jobContext = new Job(job.getConfiguration(), job.getJobName());
         Path[] tablePaths = FileInputFormat.getInputPaths(jobContext);
 
         //Consultation with kimchy revealed it should be more efficient to just have as many splits
@@ -143,14 +143,15 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
     private void start_embedded_client() {
         if (this.hostPort != null) {
             LOG.info("Starting transport elasticsearch client ...");
-            Settings settings = ImmutableSettings.settingsBuilder()
+            Settings settings = Settings.builder()
                     .put("client.transport.sniff", true).build();
             String[] split = this.hostPort.split(":");
             String host = split[0];
             int port = Integer.decode(split[1]);
 
-            this.client = new TransportClient()
-                    .addTransportAddress(new InetSocketTransportAddress(host, port));
+            this.client = TransportClient.builder().settings(settings).build()
+
+                    .addTransportAddress(new InetSocketTransportAddress(new InetSocketAddress(host, port)));
             LOG.info("Transport client started");
         } else {
             LOG.info("Starting embedded elasticsearch client ...");
@@ -264,14 +265,15 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
         private void start_embedded_client() {
             if (this.hostPort != null) {
                 LOG.info("Starting transport elasticsearch client ...");
-                Settings settings = ImmutableSettings.settingsBuilder()
+                Settings settings = Settings.builder()
                         .put("client.transport.sniff", true).build();
                 String[] split = this.hostPort.split(":");
                 String host = split[0];
                 int port = Integer.decode(split[1]);
 
-                this.client = new TransportClient()
-                        .addTransportAddress(new InetSocketTransportAddress(host, port));
+                this.client = TransportClient.builder().settings(settings).build()
+
+                        .addTransportAddress(new InetSocketTransportAddress(new InetSocketAddress(host, port)));
                 LOG.info("Transport client started");
             } else {
                 LOG.info("Starting embedded elasticsearch client ...");
@@ -301,7 +303,7 @@ public class ElasticSearchHiveInputFormat implements InputFormat {
                 this.scrollResp = client.prepareSearchScroll(scrollResp.getScrollId()).setScroll(new TimeValue(600000)).execute().actionGet();
 
             }
-            Iterator<SearchHit> resultHits = scrollResp.hits().iterator();
+            Iterator<SearchHit> resultHits = scrollResp.getHits().iterator();
             LOG.info(resultHits.hasNext());
             return resultHits;
 

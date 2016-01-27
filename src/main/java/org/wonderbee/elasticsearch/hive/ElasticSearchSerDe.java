@@ -4,6 +4,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.serde.Constants;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
+import org.apache.hadoop.hive.serde2.SerDeStats;
 import org.apache.hadoop.hive.serde2.objectinspector.*;
 import org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory;
 import org.apache.hadoop.hive.serde2.typeinfo.PrimitiveTypeInfo;
@@ -155,6 +156,11 @@ public class ElasticSearchSerDe implements SerDe {
     @Override
     public ObjectInspector getObjectInspector() throws SerDeException {
         return rowOI;
+    }
+
+    @Override
+    public SerDeStats getSerDeStats() {
+        return null;
     }
 
     /**

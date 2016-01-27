@@ -1,6 +1,5 @@
 package org.wonderbee.elasticsearch.hive;
 
-import org.wonderbee.elasticsearch.ElasticSearchOutputFormat;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
@@ -10,10 +9,9 @@ import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapred.JobConf;
-
-import org.apache.hadoop.mapred.OutputFormat;
 import org.apache.hadoop.util.Progressable;
 import org.apache.log4j.Logger;
+import org.wonderbee.elasticsearch.ElasticSearchOutputFormat;
 
 import java.io.IOException;
 import java.util.Properties;
@@ -37,7 +35,7 @@ import java.util.Properties;
 /**
  * A wrapper for Wonderdog's new style hadoop api ElasticSearchOutputFormat to work with Hive.
  */
-public class ElasticSearchHiveOutputFormat implements HiveOutputFormat<WritableComparable, Writable>, OutputFormat {
+public class ElasticSearchHiveOutputFormat implements HiveOutputFormat<WritableComparable, Writable> {
     private  ElasticSearchOutputFormat enclosedOutputFormat = new ElasticSearchOutputFormat();
     private static Logger LOG = Logger.getLogger(ElasticSearchHiveOutputFormat.class);
     @Override
